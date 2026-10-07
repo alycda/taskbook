@@ -29,7 +29,8 @@ rpassword = "7"
 fs2 = "0.4"
 unicode-width = "0.2"
 # Optional Ditto peer-to-peer backend (enable with `--features ditto`).
-# Pulls in a prebuilt native library (libdittoffi); see docs/ditto.md.
+# Pulls in a prebuilt native library (libdittoffi) and currently needs
+# Rust 1.85..=1.97 (E0690 in the SDK bindings on 1.98+); see docs/ditto.md.
 dittolive-ditto = { version = "4.14", optional = true }
 libc = { version = "0.2", optional = true }
 

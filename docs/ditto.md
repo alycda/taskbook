@@ -16,8 +16,21 @@ cargo build --release --features ditto
 The feature pulls in the `dittolive-ditto` crate, whose build script
 downloads a prebuilt native library (`libdittoffi`, ~165 MB static archive)
 for your target. Point `DITTOFFI_SEARCH_PATH` at a local copy for sandboxed
-builds (Nix, offline CI); `DITTO_LOCAL_BUILD=1` forbids the download. The
-crate needs Rust 1.85 or newer.
+builds (Nix, offline CI); `DITTO_LOCAL_BUILD=1` forbids the download.
+
+**Toolchain**: Rust 1.85 through 1.97. Rust 1.98 and newer reject a
+`#[repr(transparent)]` struct in the SDK's generated bindings
+(`dittolive-ditto-sys` 4.14.7 via `safer-ffi` 0.2.0-rc1) with error E0690,
+after [rust-lang/rust#155299](https://github.com/rust-lang/rust/pull/155299)
+made that check a hard error. Until Ditto ships a fixed SDK, build the
+feature with a pinned toolchain:
+
+```bash
+rustup toolchain install 1.97.0
+cargo +1.97.0 build --release --features ditto
+```
+
+The default build (without the feature) is unaffected.
 
 ## Setup
 

@@ -34,7 +34,8 @@ cargo test
 # Check for issues
 cargo clippy
 
-# Build/test with the optional Ditto backend (downloads a ~165 MB native lib on first build)
+# Build/test with the optional Ditto backend (downloads a ~165 MB native lib on first build).
+# Needs Rust 1.85..=1.97 until Ditto fixes an E0690 in its bindings; CI pins 1.97.0.
 cargo build --package taskbook-client --features ditto
 cargo test --package taskbook-client --features ditto -- --test-threads=1
 ```
