@@ -7,6 +7,8 @@ use std::time::Duration;
 use crossterm::event::{self, KeyEvent};
 
 use crate::error::{Result, TaskbookError};
+use crate::storage::{ChangeNotice, WatchHandle};
+use crate::taskbook::Taskbook;
 
 /// Terminal events
 #[derive(Debug)]
@@ -51,6 +53,9 @@ pub struct EventHandler {
     handler: thread::JoinHandle<()>,
     #[allow(dead_code)]
     sse_handler: Option<thread::JoinHandle<()>>,
+    /// Keeps a backend change watch alive for the lifetime of the handler.
+    #[allow(dead_code)]
+    watch: Option<WatchHandle>,
 }
 
 impl EventHandler {
@@ -63,7 +68,32 @@ impl EventHandler {
             receiver,
             handler,
             sse_handler: None,
+            watch: None,
         }
+    }
+
+    /// Create an event handler fed by the storage backend's own change
+    /// notifications (see `StorageBackend::watch`). Returns `Ok(None)` when
+    /// the backend has no push mechanism.
+    pub fn new_with_watch(tick_rate: u64, taskbook: &Taskbook) -> Result<Option<Self>> {
+        let (sender, receiver) = mpsc::channel();
+        let watch_sender = sender.clone();
+        let Some(watch) = taskbook.watch_changes(Box::new(move |notice| {
+            let archived = notice == ChangeNotice::Archive;
+            // Ignore send errors: the TUI has shut down.
+            let _ = watch_sender.send(Event::DataChanged { archived });
+        }))?
+        else {
+            return Ok(None);
+        };
+        let handler = spawn_input_thread(sender, tick_rate);
+
+        Ok(Some(Self {
+            receiver,
+            handler,
+            sse_handler: None,
+            watch: Some(watch),
+        }))
     }
 
     /// Create an event handler that also listens for SSE sync notifications.
@@ -76,6 +106,7 @@ impl EventHandler {
             receiver,
             handler,
             sse_handler: Some(sse_handler),
+            watch: None,
         }
     }
 

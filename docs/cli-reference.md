@@ -337,7 +337,7 @@ Logs out and deletes stored credentials. Sync is disabled and the client returns
 tb --status
 ```
 
-Shows current sync status, server URL, and whether credentials are saved.
+Shows current sync status, server URL (or Ditto app ID and connect mode), and whether credentials are saved.
 
 ### Migrate Local Data
 
@@ -345,7 +345,16 @@ Shows current sync status, server URL, and whether credentials are saved.
 tb --migrate
 ```
 
-Pushes existing local data to the server. Use this after registering to upload your existing tasks.
+Pushes existing local data to the configured sync backend (the server, or Ditto when `sync.backend = "ditto"`). Use this once, after registering or setting up Ditto, to upload your existing tasks.
+
+### Ditto Setup
+
+```bash
+tb --ditto-init
+tb --ditto-init --key <base64>
+```
+
+Creates `~/.taskbook/ditto-credentials.json` for the [Ditto backend](ditto.md): generates the item encryption key (printed once) or imports one with `--key`, and prompts for the auth token in `server` mode. Only available for its effect in builds with `--features ditto`.
 
 ## Global Options
 

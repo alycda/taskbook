@@ -4,11 +4,10 @@ use std::path::Path;
 use arboard::Clipboard;
 
 use crate::config::Config;
-use crate::directory::resolve_taskbook_directory;
 use crate::editor;
 use crate::error::{Result, TaskbookError};
 use crate::render::{Render, Stats};
-use crate::storage::{LocalStorage, RemoteStorage, StorageBackend};
+use crate::storage::{self, ChangeCallback, StorageBackend, WatchHandle};
 use taskbook_common::board::{self, DEFAULT_BOARD};
 use taskbook_common::due;
 use taskbook_common::{Note, StorageItem, Task};
@@ -30,14 +29,7 @@ pub struct Taskbook {
 impl Taskbook {
     pub fn new(taskbook_dir: Option<&Path>) -> Result<Self> {
         let config = Config::load_or_default();
-
-        let storage: Box<dyn StorageBackend> = if config.sync.enabled {
-            Box::new(RemoteStorage::new(&config.sync.server_url)?)
-        } else {
-            let resolved_dir = resolve_taskbook_directory(taskbook_dir)?;
-            Box::new(LocalStorage::new(&resolved_dir)?)
-        };
-
+        let storage = storage::from_config(&config, taskbook_dir)?;
         let render = Render::new(config);
 
         Ok(Self { storage, render })
@@ -50,6 +42,12 @@ impl Taskbook {
             storage,
             render: Render::new(Config::default()),
         }
+    }
+
+    /// Subscribe to data changes pushed by the storage backend, if it
+    /// supports that. See [`StorageBackend::watch`].
+    pub fn watch_changes(&self, on_change: ChangeCallback) -> Result<Option<WatchHandle>> {
+        self.storage.watch(on_change)
     }
 
     fn get_data(&self) -> Result<HashMap<String, StorageItem>> {

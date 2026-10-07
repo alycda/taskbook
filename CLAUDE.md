@@ -33,6 +33,11 @@ cargo test
 
 # Check for issues
 cargo clippy
+
+# Build/test with the optional Ditto backend (downloads a ~165 MB native lib on first build).
+# Needs Rust 1.85..=1.97 until Ditto fixes an E0690 in its bindings; CI pins 1.97.0.
+cargo build --package taskbook-client --features ditto
+cargo test --package taskbook-client --features ditto -- --test-threads=1
 ```
 
 The client binary is named `tb` and the server binary is `tb-server`.
@@ -70,9 +75,10 @@ crates/
 │       │   ├── mod.rs      # MCP stdio server (JSON-RPC 2.0 loop)
 │       │   └── tools.rs    # MCP tool schemas + dispatch into Taskbook
 │       ├── storage/
-│       │   ├── mod.rs      # StorageBackend trait
+│       │   ├── mod.rs      # StorageBackend trait + config-driven factory
 │       │   ├── local.rs    # LocalStorage (file-based)
-│       │   └── remote.rs   # RemoteStorage (HTTP + encryption)
+│       │   ├── remote.rs   # RemoteStorage (HTTP + encryption)
+│       │   └── ditto.rs    # DittoStorage (peer-to-peer CRDT sync, feature "ditto")
 │       └── tui/            # Interactive TUI (ratatui + crossterm)
 │
 └── taskbook-server/        # Server binary (tb-server)
@@ -99,7 +105,7 @@ crates/
 
 ### Key Design Decisions
 
-1. **StorageBackend Trait**: `Taskbook` business logic is storage-agnostic via `Box<dyn StorageBackend>`. Backend selection is config-driven — local file storage by default, remote server when `sync.enabled = true`.
+1. **StorageBackend Trait**: `Taskbook` business logic is storage-agnostic via `Box<dyn StorageBackend>`. Backend selection is config-driven through `storage::from_config` — local file storage by default, the HTTP server when `sync.enabled = true`, or Ditto when additionally `sync.backend = "ditto"` (only in builds with `--features ditto`). Backends may implement `watch` to push change notifications; the TUI uses it when available and falls back to the server's SSE stream.
 
 2. **Client-Side Encryption**: All data is encrypted with AES-256-GCM before being sent to the server. The 32-byte encryption key is generated on registration and never leaves the client. Each item is encrypted individually with a unique random nonce.
 
@@ -123,6 +129,8 @@ crates/
    ├── storage/storage.json   # Active items
    ├── archive/archive.json   # Deleted items
    ├── credentials.json       # Server token + encryption key
+   ├── ditto-credentials.json # Ditto license/auth token, encryption key, private key path
+   ├── ditto/                 # Ditto local database (ditto backend)
    └── .temp/                 # Atomic write temp files
    ```
 
@@ -160,7 +168,8 @@ tb --register --server <url> --username <name> --email <email> --password <pass>
 tb --login --server <url> --username <name> --password <pass> --key <base64>
 tb --logout
 tb --status
-tb --migrate                # Push local data to server
+tb --migrate                # Push local data to the sync backend (server or Ditto)
+tb --ditto-init             # Create Ditto secrets (encryption key, auth token); --key <b64> imports a key
 
 # Mode
 tb --cli                    # Force non-interactive CLI mode
@@ -250,6 +259,7 @@ All under `/api/v1/` unless noted:
 - `base64` - Encoding encrypted data
 - `rpassword` - Secure password input
 - `fs2` - File locking for local storage
+- `dittolive-ditto` (optional, feature `ditto`) - Ditto peer-to-peer sync SDK
 
 ### Common (taskbook-common)
 - `aes-gcm` - AES-256-GCM encryption
