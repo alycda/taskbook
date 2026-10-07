@@ -8,7 +8,7 @@ mod theme;
 mod ui;
 pub mod widgets;
 
-use crate::config::Config;
+use crate::config::SyncBackend;
 use crate::credentials::Credentials;
 use crate::error::{Result, TaskbookError};
 pub use app::{App, ViewMode};
@@ -133,7 +133,7 @@ pub fn run(taskbook_dir: Option<&Path>) -> Result<()> {
 }
 
 fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> {
-    let events = create_event_handler(&app.config);
+    let events = create_event_handler(app);
 
     while app.running {
         // Force full redraw if requested (e.g. after returning from external editor)
@@ -176,8 +176,16 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
 }
 
 /// Create the appropriate event handler based on sync configuration.
-fn create_event_handler(config: &Config) -> event::EventHandler {
-    if config.sync.enabled {
+///
+/// Backends that push change notifications themselves (see
+/// `StorageBackend::watch`) are preferred; the HTTP server backend falls back
+/// to its SSE stream.
+fn create_event_handler(app: &App) -> event::EventHandler {
+    if let Ok(Some(handler)) = event::EventHandler::new_with_watch(250, &app.taskbook) {
+        return handler;
+    }
+    let config = &app.config;
+    if config.sync.enabled && config.sync.backend == SyncBackend::Server {
         if let Ok(Some(creds)) = Credentials::load() {
             return event::EventHandler::new_with_sse(250, creds.server_url, creds.token);
         }

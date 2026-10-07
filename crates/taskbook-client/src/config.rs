@@ -194,6 +194,26 @@ impl SortMethod {
     }
 }
 
+/// Which storage backend to use when `sync.enabled` is true.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SyncBackend {
+    /// The taskbook HTTP server (`tb-server`) with client-side encryption.
+    #[default]
+    Server,
+    /// A Ditto peer-to-peer mesh (requires a build with `--features ditto`).
+    Ditto,
+}
+
+impl SyncBackend {
+    pub fn display_name(self) -> &'static str {
+        match self {
+            SyncBackend::Server => "server",
+            SyncBackend::Ditto => "ditto",
+        }
+    }
+}
+
 /// Sync configuration for remote server
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -203,6 +223,17 @@ pub struct SyncConfig {
 
     #[serde(default = "default_server_url")]
     pub server_url: String,
+
+    /// Backend selected when `enabled` is true. Omitted from the file while it
+    /// is the default so existing configs round-trip unchanged.
+    #[serde(default, skip_serializing_if = "SyncBackend::is_default")]
+    pub backend: SyncBackend,
+}
+
+impl SyncBackend {
+    fn is_default(&self) -> bool {
+        *self == SyncBackend::default()
+    }
 }
 
 fn default_server_url() -> String {
@@ -214,6 +245,109 @@ impl Default for SyncConfig {
         Self {
             enabled: false,
             server_url: default_server_url(),
+            backend: SyncBackend::default(),
+        }
+    }
+}
+
+/// How the Ditto backend connects to other peers.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DittoConnect {
+    /// Small peers only: LAN / peer-to-peer mesh, no cloud account. Uses the
+    /// shared private key from the Ditto credentials file when one is set.
+    #[default]
+    Peers,
+    /// Connect to a Ditto Cloud app or a self-hosted Big Peer at `url`,
+    /// authenticating with the token from the Ditto credentials file.
+    Server,
+}
+
+/// Settings for the Ditto peer-to-peer backend (`sync.backend = "ditto"`).
+///
+/// Secrets (auth token, encryption key, private key) are not stored here; they
+/// live in `~/.taskbook/ditto-credentials.json`. See docs/ditto.md.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DittoConfig {
+    /// Ditto app / database ID. Every device that should share data uses the
+    /// same value. For `peers` mode any string works; Ditto Cloud issues a UUID.
+    #[serde(default)]
+    pub app_id: String,
+
+    #[serde(default)]
+    pub connect: DittoConnect,
+
+    /// Auth / sync URL for `connect = "server"` (e.g. the Ditto portal's
+    /// "Auth URL"). Ignored in `peers` mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+
+    /// Name of the authentication provider (webhook) configured on the Ditto
+    /// portal, used with the token on login in `server` mode.
+    #[serde(default = "default_ditto_provider")]
+    pub provider: String,
+
+    /// Where Ditto keeps its local database. Defaults to `~/.taskbook/ditto`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub persistence_dir: Option<String>,
+
+    /// Ditto collection that holds the items.
+    #[serde(default = "default_ditto_collection")]
+    pub collection: String,
+
+    /// Encrypt item payloads client-side (AES-256-GCM) with the key from the
+    /// Ditto credentials file before they enter the Ditto store.
+    #[serde(default = "default_true")]
+    pub encrypt: bool,
+
+    /// After a one-shot CLI write, wait up to this long for a peer connection
+    /// so the change has a chance to sync before the process exits. `0`
+    /// disables the wait. The TUI is long-lived and syncs continuously.
+    #[serde(default = "default_flush_timeout_ms")]
+    pub flush_timeout_ms: u64,
+}
+
+fn default_ditto_provider() -> String {
+    "development".to_string()
+}
+
+fn default_ditto_collection() -> String {
+    "taskbook_items".to_string()
+}
+
+fn default_flush_timeout_ms() -> u64 {
+    1000
+}
+
+impl Default for DittoConfig {
+    fn default() -> Self {
+        Self {
+            app_id: String::new(),
+            connect: DittoConnect::default(),
+            url: None,
+            provider: default_ditto_provider(),
+            persistence_dir: None,
+            collection: default_ditto_collection(),
+            encrypt: true,
+            flush_timeout_ms: default_flush_timeout_ms(),
+        }
+    }
+}
+
+impl DittoConfig {
+    fn is_default(&self) -> bool {
+        *self == DittoConfig::default()
+    }
+
+    /// Resolved persistence directory (`~` expanded).
+    pub fn persistence_path(&self) -> PathBuf {
+        match &self.persistence_dir {
+            Some(dir) => Config::format_taskbook_dir(dir),
+            None => {
+                let home = dirs::home_dir().expect("Could not find home directory");
+                home.join(".taskbook").join("ditto")
+            }
         }
     }
 }
@@ -236,6 +370,10 @@ pub struct Config {
 
     #[serde(default)]
     pub sync: SyncConfig,
+
+    /// Ditto backend settings; only written to the file once customised.
+    #[serde(default, skip_serializing_if = "DittoConfig::is_default")]
+    pub ditto: DittoConfig,
 
     #[serde(default)]
     pub sort_method: SortMethod,
@@ -260,6 +398,7 @@ impl Default for Config {
             display_progress_overview: true,
             theme: ThemeConfig::default(),
             sync: SyncConfig::default(),
+            ditto: DittoConfig::default(),
             sort_method: SortMethod::default(),
             default_view: ViewMode::default(),
         }
@@ -326,7 +465,7 @@ impl Config {
     }
 
     /// Format a taskbook directory path, expanding ~ to home directory
-    fn format_taskbook_dir(path: &str) -> PathBuf {
+    pub(crate) fn format_taskbook_dir(path: &str) -> PathBuf {
         if path.starts_with('~') {
             let home = dirs::home_dir().expect("Could not find home directory");
             let rest = path.trim_start_matches('~').trim_start_matches('/');
@@ -431,6 +570,38 @@ mod tests {
         }"#;
         let config: Config = serde_json::from_str(json).unwrap();
         assert_eq!(config.default_view, ViewMode::Board);
+    }
+
+    #[test]
+    fn sync_backend_defaults_to_server_and_is_not_serialized() {
+        let json = r#"{ "sync": { "enabled": true, "serverUrl": "http://x" } }"#;
+        let config: Config = serde_json::from_str(json).unwrap();
+        assert_eq!(config.sync.backend, SyncBackend::Server);
+        let out = serde_json::to_string(&config).unwrap();
+        assert!(!out.contains("\"backend\""));
+        assert!(!out.contains("\"ditto\""));
+    }
+
+    #[test]
+    fn ditto_config_parses_and_round_trips() {
+        let json = r#"{
+            "sync": { "enabled": true, "backend": "ditto" },
+            "ditto": { "appId": "abc", "connect": "server", "url": "https://x.cloud.ditto.live", "encrypt": false }
+        }"#;
+        let config: Config = serde_json::from_str(json).unwrap();
+        assert_eq!(config.sync.backend, SyncBackend::Ditto);
+        assert_eq!(config.ditto.app_id, "abc");
+        assert_eq!(config.ditto.connect, DittoConnect::Server);
+        assert_eq!(
+            config.ditto.url.as_deref(),
+            Some("https://x.cloud.ditto.live")
+        );
+        assert!(!config.ditto.encrypt);
+        assert_eq!(config.ditto.collection, "taskbook_items");
+        assert_eq!(config.ditto.flush_timeout_ms, 1000);
+        let out = serde_json::to_string(&config).unwrap();
+        assert!(out.contains("\"backend\":\"ditto\""));
+        assert!(out.contains("\"appId\":\"abc\""));
     }
 
     #[test]

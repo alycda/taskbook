@@ -52,7 +52,8 @@ const HELP_TEXT: &str = r#"
       --login            Log in to an existing account
       --logout           Log out and delete credentials
       --status           Show sync status
-      --migrate          Push local data to server
+      --migrate          Push local data to the sync backend
+      --ditto-init       Set up Ditto backend secrets
 
     Examples
       $ tb
@@ -87,6 +88,8 @@ const HELP_TEXT: &str = r#"
       $ tb --logout
       $ tb --status
       $ tb --migrate
+      $ tb --ditto-init
+      $ tb --ditto-init --key <base64>
 "#;
 
 #[derive(Parser)]
@@ -206,9 +209,13 @@ struct Cli {
     #[arg(long)]
     status: bool,
 
-    /// Push local data to server
+    /// Push local data to the configured sync backend
     #[arg(long)]
     migrate: bool,
+
+    /// Set up Ditto backend secrets (encryption key, auth token)
+    #[arg(long)]
+    ditto_init: bool,
 
     /// Server URL for register/login
     #[arg(long)]
@@ -271,6 +278,14 @@ fn main() {
 
     if cli.status {
         if let Err(e) = auth::status() {
+            eprintln!("Error: {}", e);
+            process::exit(1);
+        }
+        return;
+    }
+
+    if cli.ditto_init {
+        if let Err(e) = auth::ditto_init(cli.key.as_deref()) {
             eprintln!("Error: {}", e);
             process::exit(1);
         }

@@ -11,6 +11,7 @@ A Rust port of [taskbook](https://github.com/klaussinani/taskbook) - tasks, boar
 - Timeline and archive views
 - Customizable themes (including Catppuccin)
 - **Optional server sync** with end-to-end encryption (AES-256-GCM)
+- **Optional peer-to-peer sync** via [Ditto](docs/ditto.md) (`--features ditto`), same encryption
 
 ## Installation
 
@@ -124,6 +125,19 @@ All data is encrypted client-side with AES-256-GCM before being sent to the serv
 
 See [Server Setup](docs/server.md) for running your own server.
 
+## Peer-to-Peer Sync (Ditto)
+
+Builds with `--features ditto` can sync through a [Ditto](https://ditto.com) mesh instead of a server: devices find each other over LAN, Bluetooth or peer-to-peer Wi-Fi, or go through Ditto Cloud. Payloads use the same client-side encryption.
+
+```bash
+# Set sync.enabled = true, sync.backend = "ditto" and ditto.appId in the config, then
+tb --ditto-init        # generate the encryption key (prints it once)
+tb --migrate           # push existing local data (first device only)
+tb --ditto-init --key <base64>   # import the key on other devices
+```
+
+See [Ditto Backend](docs/ditto.md) for setup, configuration and the sync semantics.
+
 ## Configuration
 
 Configuration is stored in `~/.config/taskbook/taskbook.json` (honoring `$XDG_CONFIG_HOME`; a legacy `~/.taskbook.json` is still used if present):
@@ -156,6 +170,7 @@ See the [docs](docs/) folder for detailed documentation:
 - [Configuration](docs/configuration.md)
 - [Server Setup](docs/server.md)
 - [Sync & Encryption](docs/sync.md)
+- [Ditto Backend](docs/ditto.md)
 - [Kubernetes Deployment](docs/kubernetes.md)
 
 ## Data Compatibility

@@ -32,6 +32,7 @@ tb --begin 2
 | [Configuration](configuration.md) | Client configuration options |
 | [Server Setup](server.md) | Running the sync server |
 | [Sync & Encryption](sync.md) | Setting up sync between devices |
+| [Ditto Backend](ditto.md) | Peer-to-peer sync with Ditto (optional feature) |
 | [Kubernetes Deployment](kubernetes.md) | Deploying the server to Kubernetes |
 | [Observability](observability.md) | OpenTelemetry traces, metrics & logs |
 
@@ -48,6 +49,7 @@ tb --begin 2
 - **Clipboard**: Copy item descriptions
 - **Themes**: Customizable color schemes including Catppuccin
 - **Server Sync**: Optional encrypted sync with real-time SSE notifications
+- **Ditto Sync**: Optional peer-to-peer sync (LAN, Bluetooth, Ditto Cloud) with the same client-side encryption
 - **End-to-End Encryption**: Your data is encrypted client-side with AES-256-GCM
 
 ## Architecture
@@ -61,6 +63,7 @@ tb --begin 2
 
 ~/.config/taskbook/taskbook.json  # Configuration file (legacy: ~/.taskbook.json)
 ~/.taskbook/credentials.json  # Server credentials (when using sync)
+~/.taskbook/ditto-credentials.json  # Ditto secrets (when using the Ditto backend)
 ```
 
 ## Data Compatibility

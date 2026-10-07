@@ -49,3 +49,27 @@ jobs:
 
       - name: Run tests
         run: cargo test --workspace
+
+  ditto:
+    # The optional Ditto backend links a prebuilt native library downloaded
+    # by the dittolive-ditto-sys build script; keep it in its own job so the
+    # default build stays small.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ditto
+
+      - name: Clippy (ditto feature)
+        run: cargo clippy --package taskbook-client --features ditto -- -D warnings
+
+      - name: Test (ditto feature)
+        run: cargo test --package taskbook-client --features ditto -- --test-threads=1

@@ -167,11 +167,41 @@ Configuration for server sync. This is typically managed automatically by the `-
 | Field | Type | Description |
 |-------|------|-------------|
 | `enabled` | `boolean` | Whether sync is active |
-| `serverUrl` | `string` | URL of the sync server |
+| `serverUrl` | `string` | URL of the sync server (`backend = "server"`) |
+| `backend` | `"server"` \| `"ditto"` | Which sync backend to use; defaults to `"server"` |
 
-When `enabled` is `true`, all task operations are synced to the server. The client stores encrypted data locally as a cache and syncs with the server on each operation.
+When `enabled` is `true`, all task operations go to the selected backend instead of local files.
 
-See [Sync & Encryption](sync.md) for setup instructions.
+See [Sync & Encryption](sync.md) for the server backend and [Ditto Backend](ditto.md) for the peer-to-peer backend.
+
+### ditto
+
+**Type**: `object`
+**Default**: `{ "connect": "peers", "provider": "development", "collection": "taskbook_items", "encrypt": true, "flushTimeoutMs": 1000 }`
+
+Settings for the Ditto backend (`sync.backend = "ditto"`, requires a build with `--features ditto`). Secrets live in `~/.taskbook/ditto-credentials.json`, not here.
+
+```json
+{
+  "ditto": {
+    "appId": "my-taskbook",
+    "connect": "peers"
+  }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `appId` | `string` | Ditto app / database ID shared by all devices (required) |
+| `connect` | `"peers"` \| `"server"` | LAN / P2P mesh, or Ditto Cloud / Big Peer |
+| `url` | `string` | Auth / sync URL for `server` mode |
+| `provider` | `string` | Auth provider name used with the token in `server` mode |
+| `persistenceDir` | `string` | Ditto's local database directory (default `~/.taskbook/ditto`) |
+| `collection` | `string` | Collection holding the items |
+| `encrypt` | `boolean` | Encrypt payloads client-side (AES-256-GCM) |
+| `flushTimeoutMs` | `number` | Bounded wait for a peer after a one-shot CLI write |
+
+See [Ditto Backend](ditto.md) for the full reference.
 
 ## Environment Variables
 

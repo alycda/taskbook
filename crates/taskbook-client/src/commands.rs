@@ -1,16 +1,12 @@
 use std::path::PathBuf;
 
-use base64::Engine;
 use colored::Colorize;
 
-use crate::api_client::{ApiClient, EncryptedItemData};
 use crate::config::Config;
-use crate::credentials::Credentials;
 use crate::directory::resolve_taskbook_directory;
-use crate::error::{Result, TaskbookError};
-use crate::storage::{LocalStorage, StorageBackend};
+use crate::error::Result;
+use crate::storage::{self, LocalStorage, StorageBackend};
 use crate::taskbook::Taskbook;
-use taskbook_common::encryption::encrypt_item;
 
 /// Execute CLI commands
 #[allow(clippy::too_many_arguments)]
@@ -132,15 +128,9 @@ pub fn run(
     taskbook.display_stats()
 }
 
-/// Migrate local data to the remote server.
+/// Migrate local data to the configured sync backend (server or Ditto).
 pub fn migrate(taskbook_dir: Option<PathBuf>) -> Result<()> {
-    let creds = Credentials::load()?.ok_or_else(|| {
-        TaskbookError::Auth("not logged in — run `tb register` or `tb login` first".to_string())
-    })?;
-
     let config = Config::load_or_default();
-    let encryption_key = creds.encryption_key_bytes()?;
-    let engine = base64::engine::general_purpose::STANDARD;
 
     // Load local data
     let resolved_dir = resolve_taskbook_directory(taskbook_dir.as_deref())?;
@@ -149,55 +139,32 @@ pub fn migrate(taskbook_dir: Option<PathBuf>) -> Result<()> {
     let items = local.get()?;
     let archive = local.get_archive()?;
 
-    // Encrypt and upload items
-    let client = ApiClient::new(&config.sync.server_url, Some(&creds.token));
-
-    let mut encrypted_items = std::collections::HashMap::new();
-    for (key, item) in &items {
-        let encrypted = encrypt_item(&encryption_key, item)
-            .map_err(|e| TaskbookError::General(format!("encryption failed: {e}")))?;
-        encrypted_items.insert(
-            key.clone(),
-            EncryptedItemData {
-                data: engine.encode(&encrypted.data),
-                nonce: engine.encode(&encrypted.nonce),
-            },
-        );
-    }
-    client.put_items(&encrypted_items)?;
-
-    let mut encrypted_archive = std::collections::HashMap::new();
-    for (key, item) in &archive {
-        let encrypted = encrypt_item(&encryption_key, item)
-            .map_err(|e| TaskbookError::General(format!("encryption failed: {e}")))?;
-        encrypted_archive.insert(
-            key.clone(),
-            EncryptedItemData {
-                data: engine.encode(&encrypted.data),
-                nonce: engine.encode(&encrypted.nonce),
-            },
-        );
-    }
-    client.put_archive(&encrypted_archive)?;
+    // The sync backend handles encryption and transport for its target.
+    let target = storage::sync_backend(&config)?;
+    target.set(&items)?;
+    target.set_archive(&archive)?;
 
     println!(
         "{}",
         format!(
-            "Migrated {} items and {} archived items to server.",
+            "Migrated {} items and {} archived items to {}.",
             items.len(),
-            archive.len()
+            archive.len(),
+            config.sync.backend.display_name()
         )
         .green()
         .bold()
     );
-    println!(
-        "{}",
-        format!(
-            "To enable sync, set sync.enabled = true in {}",
-            crate::config::Config::config_file_path().display()
-        )
-        .dimmed()
-    );
+    if !config.sync.enabled {
+        println!(
+            "{}",
+            format!(
+                "To enable sync, set sync.enabled = true in {}",
+                crate::config::Config::config_file_path().display()
+            )
+            .dimmed()
+        );
+    }
 
     Ok(())
 }
