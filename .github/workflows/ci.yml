@@ -51,21 +51,16 @@ jobs:
         run: cargo test --workspace
 
   ditto:
-    # The optional Ditto backend links a prebuilt native library downloaded
-    # by the dittolive-ditto-sys build script; keep it in its own job so the
-    # default build stays small.
-    #
-    # Pinned toolchain: dittolive-ditto-sys 4.14.7 (via safer-ffi 0.2.0-rc1)
-    # generates a #[repr(transparent)] struct that Rust 1.98+ rejects with
-    # E0690 (rust-lang/rust#155299). Bump once Ditto ships a fixed SDK.
+    # The optional Ditto backend links a prebuilt native library that the
+    # crate's build script downloads (see crates/taskbook-client/build.rs);
+    # keep it in its own job so the default build stays small.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.97.0
           components: clippy
 
       - name: Cache dependencies
