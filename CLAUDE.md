@@ -34,8 +34,8 @@ cargo test
 # Check for issues
 cargo clippy
 
-# Build/test with the optional Ditto backend (downloads a ~165 MB native lib on first build).
-# Needs Rust 1.85..=1.97 until Ditto fixes an E0690 in its bindings; CI pins 1.97.0.
+# Build/test with the optional Ditto backend (build.rs downloads a ~165 MB native
+# lib on first build, or set DITTO_SDK_DIR to a directory holding libdittoffi.a).
 cargo build --package taskbook-client --features ditto
 cargo test --package taskbook-client --features ditto -- --test-threads=1
 ```
@@ -78,7 +78,10 @@ crates/
 │       │   ├── mod.rs      # StorageBackend trait + config-driven factory
 │       │   ├── local.rs    # LocalStorage (file-based)
 │       │   ├── remote.rs   # RemoteStorage (HTTP + encryption)
-│       │   └── ditto.rs    # DittoStorage (peer-to-peer CRDT sync, feature "ditto")
+│       │   └── ditto/      # DittoStorage (peer-to-peer CRDT sync, feature "ditto")
+│       │       ├── mod.rs  #   backend: document model, diff writes, id renumbering
+│       │       ├── sdk.rs  #   safe wrapper over the C ABI (open, DQL, observers, presence)
+│       │       └── ffi.rs  #   hand-written extern "C" bindings to libdittoffi (see build.rs)
 │       └── tui/            # Interactive TUI (ratatui + crossterm)
 │
 └── taskbook-server/        # Server binary (tb-server)
@@ -259,7 +262,7 @@ All under `/api/v1/` unless noted:
 - `base64` - Encoding encrypted data
 - `rpassword` - Secure password input
 - `fs2` - File locking for local storage
-- `dittolive-ditto` (optional, feature `ditto`) - Ditto peer-to-peer sync SDK
+- `ciborium` + `libc` (optional, feature `ditto`) - CBOR for Ditto's C ABI; the native `libdittoffi.a` is fetched by `build.rs` (`scripts/ditto-abi-check.sh` diffs the ABI across SDK releases)
 
 ### Common (taskbook-common)
 - `aes-gcm` - AES-256-GCM encryption

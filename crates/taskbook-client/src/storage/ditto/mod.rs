@@ -23,14 +23,21 @@
 //!   HTTP server backend does. Field-level merging is deliberately given up.
 //!
 //! * `set` / `set_archive` diff the new map against the last read snapshot
-//!   and only upsert changed items and soft-delete missing ones, inside one
-//!   Ditto transaction. The collection is never replaced wholesale, which
-//!   would fight the CRDT and clobber concurrent edits from other devices.
+//!   and only upsert changed items and soft-delete missing ones. The
+//!   collection is never replaced wholesale, which would fight the CRDT and
+//!   clobber concurrent edits from other devices.
 //!
 //! * Taskbook ids are sequential (`max + 1`), so two devices working offline
 //!   can both create item 8. Both documents survive the merge; on the next
 //!   read the duplicates are renumbered to fresh ids and written back. Ids
 //!   can therefore shift after a sync, but nothing is lost.
+//!
+//! The native library is driven through a hand-written binding of Ditto's
+//! C ABI ([`ffi`]) wrapped by [`sdk`]; see `build.rs` for how the library is
+//! obtained and `docs/ditto.md` for the ABI-tracking consequences.
+
+mod ffi;
+pub mod sdk;
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -39,11 +46,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use base64::Engine;
-use dittolive_ditto::dql::QueryResult;
-use dittolive_ditto::prelude::*;
-use dittolive_ditto::sync::SyncSubscription;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{json, Value};
 use taskbook_common::encryption::{decrypt_item, encrypt_item, EncryptedItem};
 use taskbook_common::StorageItem;
 
@@ -102,13 +106,12 @@ impl Snapshots {
 }
 
 pub struct DittoStorage {
-    ditto: Ditto,
-    rt: tokio::runtime::Runtime,
+    ditto: sdk::Ditto,
     collection: String,
     key: Option<[u8; 32]>,
     flush_timeout: Duration,
     sync_started: bool,
-    _subscription: Option<Arc<SyncSubscription>>,
+    _subscription: Option<sdk::Subscription>,
     snapshots: Mutex<Snapshots>,
     dirty: AtomicBool,
 }
@@ -143,7 +146,7 @@ impl DittoStorage {
                     }
                     None => None,
                 };
-                DittoConfigConnect::SmallPeersOnly { private_key }
+                sdk::Connect::SmallPeersOnly { private_key }
             }
             DittoConnect::Server => {
                 let url = settings
@@ -151,10 +154,9 @@ impl DittoStorage {
                     .as_deref()
                     .filter(|u| !u.is_empty())
                     .ok_or_else(|| general("ditto.url is required for connect = \"server\""))?;
-                let url = url
-                    .parse()
-                    .map_err(|e| general(format!("invalid ditto.url {url:?}: {e}")))?;
-                DittoConfigConnect::Server { url }
+                sdk::Connect::Server {
+                    url: url.to_string(),
+                }
             }
         };
 
@@ -175,7 +177,7 @@ impl DittoStorage {
     /// (used by tests).
     fn open(
         settings: &DittoSettings,
-        connect: DittoConfigConnect,
+        connect: sdk::Connect,
         key: Option<[u8; 32]>,
         token: Option<String>,
         license: Option<String>,
@@ -189,15 +191,7 @@ impl DittoStorage {
         let dir = settings.persistence_path();
         std::fs::create_dir_all(&dir)?;
 
-        let config = DittoConfig::new(settings.app_id.clone(), connect)
-            .with_persistence_directory(absolute(&dir));
-
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(1)
-            .enable_all()
-            .build()?;
-
-        let ditto = {
+        let mut ditto = {
             // Ditto's native init (triggered by the first SDK call) prints a
             // tracing-filter warning straight to stderr regardless of log
             // settings; keep it off the terminal for one-shot CLI commands
@@ -208,12 +202,24 @@ impl DittoStorage {
                 StderrSilencer::new()
             };
             configure_logging();
-            let ditto = Ditto::open_sync(config).map_err(ditto_err)?;
+            let ditto =
+                sdk::Ditto::open(&settings.app_id, &connect, &absolute(&dir)).map_err(sdk_err)?;
             // Mutating DQL (INSERT/UPDATE) is only enabled once legacy v3 sync
             // is switched off; every peer here runs this version or newer.
-            ditto.disable_sync_with_v3().map_err(ditto_err)?;
+            ditto.disable_sync_with_v3().map_err(sdk_err)?;
             ditto
         };
+
+        // `Server` connect mode authenticates with a token whenever Ditto
+        // asks for it (initially and before expiry).
+        if matches!(connect, sdk::Connect::Server { .. }) {
+            let token = token.ok_or_else(|| {
+                general("ditto connect = \"server\" needs an auth token — run `tb --ditto-init`")
+            })?;
+            ditto
+                .set_login(&token, &settings.provider)
+                .map_err(sdk_err)?;
+        }
 
         // Offline (peers) identities must be activated with a license token
         // before sync can start; online identities activate through login.
@@ -223,33 +229,11 @@ impl DittoStorage {
                 .map_err(|e| general(format!("ditto: invalid license token: {e}")))?;
         }
 
-        // `Server` connect mode authenticates with a token supplied from the
-        // expiration handler, which Ditto also invokes for the initial login.
-        if let Some(auth) = ditto.auth() {
-            let token = token.ok_or_else(|| {
-                general("ditto connect = \"server\" needs an auth token — run `tb --ditto-init`")
-            })?;
-            let provider = settings.provider.clone();
-            auth.set_expiration_handler(move |ditto: &Ditto, _remaining: Duration| {
-                let token = token.clone();
-                let provider = provider.clone();
-                let auth = ditto.auth();
-                async move {
-                    if let Some(auth) = auth {
-                        if let Err(e) = auth.login(&token, &provider) {
-                            eprintln!("ditto: login failed: {e}");
-                        }
-                    }
-                }
-            });
-        }
-
         let subscription = if start_sync {
             let subscription = ditto
-                .sync()
-                .register_subscription_v2(format!("SELECT * FROM {}", settings.collection))
-                .map_err(ditto_err)?;
-            ditto.sync().start().map_err(ditto_err)?;
+                .register_subscription(&format!("SELECT * FROM {}", settings.collection))
+                .map_err(sdk_err)?;
+            ditto.start_sync().map_err(sdk_err)?;
             Some(subscription)
         } else {
             None
@@ -257,7 +241,6 @@ impl DittoStorage {
 
         Ok(Self {
             ditto,
-            rt,
             collection: settings.collection.clone(),
             key,
             flush_timeout: Duration::from_millis(settings.flush_timeout_ms),
@@ -268,10 +251,8 @@ impl DittoStorage {
         })
     }
 
-    fn execute(&self, query: String, args: serde_json::Value) -> Result<QueryResult> {
-        self.rt
-            .block_on(self.ditto.store().execute_v2((query, args)))
-            .map_err(ditto_err)
+    fn execute(&self, query: &str, args: Value) -> Result<Vec<Value>> {
+        self.ditto.execute(query, Some(&args)).map_err(sdk_err)
     }
 
     fn select_query(&self) -> String {
@@ -356,11 +337,11 @@ impl DittoStorage {
     /// Read one logical collection, resolving duplicate taskbook ids, and
     /// refresh the diff snapshot.
     fn read(&self, archived: bool) -> Result<HashMap<String, StorageItem>> {
-        let result = self.execute(self.select_query(), json!({ "archived": archived }))?;
+        let result = self.execute(&self.select_query(), json!({ "archived": archived }))?;
 
-        let mut rows: Vec<(Doc, StorageItem)> = Vec::with_capacity(result.item_count());
-        for row in result.iter() {
-            let doc: Doc = row.deserialize_value().map_err(ditto_err)?;
+        let mut rows: Vec<(Doc, StorageItem)> = Vec::with_capacity(result.len());
+        for row in result {
+            let doc: Doc = serde_json::from_value(row)?;
             let item = self.decode(&doc)?;
             rows.push((doc, item));
         }
@@ -463,37 +444,35 @@ impl DittoStorage {
         Ok(())
     }
 
-    /// Run upserts and soft-deletes in one transaction.
+    /// Apply upserts and soft-deletes, one statement each.
+    ///
+    /// Not wrapped in a Ditto transaction: the C ABI only exposes
+    /// transactions through asynchronous continuations, and `set` /
+    /// `set_archive` were never atomic with respect to each other anyway. A
+    /// crash mid-batch leaves individually valid documents that the next
+    /// read reconciles.
     fn apply(&self, upserts: Vec<Doc>, deletes: Vec<String>) -> Result<()> {
         let upsert_query = self.upsert_query();
         let delete_query = self.soft_delete_query();
         let now = now_millis();
 
-        let _committed: TransactionCompletionAction = self
-            .rt
-            .block_on(self.ditto.store().transaction(async |tx| {
-                for doc in &upserts {
-                    tx.execute((upsert_query.as_str(), json!({ "doc": doc })))
-                        .await?;
-                }
-                for id in &deletes {
-                    tx.execute((delete_query.as_str(), json!({ "id": id, "now": now })))
-                        .await?;
-                }
-                Ok::<_, DittoError>(TransactionCompletionAction::Commit)
-            }))
-            .map_err(ditto_err)?;
+        for doc in &upserts {
+            self.execute(&upsert_query, json!({ "doc": doc }))?;
+        }
+        for id in &deletes {
+            self.execute(&delete_query, json!({ "id": id, "now": now }))?;
+        }
         Ok(())
     }
 
     /// Number of soft-deleted documents (for tests and diagnostics).
     #[cfg(test)]
     fn tombstone_count(&self) -> Result<usize> {
-        let result = self.execute(
-            format!("SELECT _id FROM {} WHERE deleted = true", self.collection),
+        let rows = self.execute(
+            &format!("SELECT _id FROM {} WHERE deleted = true", self.collection),
             json!({}),
         )?;
-        Ok(result.item_count())
+        Ok(rows.len())
     }
 }
 
@@ -524,17 +503,17 @@ impl StorageBackend for DittoStorage {
             let mut first = true;
             let observer = self
                 .ditto
-                .store()
-                .register_observer_v2(
-                    (self.select_query(), json!({ "archived": archived })),
-                    move |_result: QueryResult| {
+                .register_observer(
+                    &self.select_query(),
+                    Some(&json!({ "archived": archived })),
+                    move || {
                         if std::mem::take(&mut first) {
                             return;
                         }
                         on_change(notice);
                     },
                 )
-                .map_err(ditto_err)?;
+                .map_err(sdk_err)?;
             observers.push(observer);
         }
         Ok(Some(WatchHandle::new(observers)))
@@ -552,7 +531,7 @@ impl Drop for DittoStorage {
                 if now >= deadline {
                     break;
                 }
-                if !self.ditto.presence().graph().remote_peers.is_empty() {
+                if self.ditto.remote_peer_count().unwrap_or(0) > 0 {
                     std::thread::sleep(FLUSH_GRACE.min(deadline - now));
                     break;
                 }
@@ -560,8 +539,12 @@ impl Drop for DittoStorage {
             }
         }
         if self.sync_started {
-            self.ditto.sync().stop();
+            self.ditto.stop_sync();
         }
+        // Subscription and observers must go before the instance they hang
+        // off; `_subscription` is dropped explicitly here, observers are
+        // owned by the TUI's watch handle and dropped before `Taskbook`.
+        self._subscription = None;
     }
 }
 
@@ -616,19 +599,15 @@ fn configure_logging() {
     match std::env::var(LOG_ENV_VAR) {
         Ok(level) => {
             let level = match level.to_ascii_lowercase().as_str() {
-                "error" => LogLevel::Error,
-                "warn" | "warning" => LogLevel::Warning,
-                "info" => LogLevel::Info,
-                "debug" => LogLevel::Debug,
-                _ => LogLevel::Verbose,
+                "error" => sdk::LogLevel::Error,
+                "warn" | "warning" => sdk::LogLevel::Warning,
+                "info" => sdk::LogLevel::Info,
+                "debug" => sdk::LogLevel::Debug,
+                _ => sdk::LogLevel::Verbose,
             };
-            DittoLogger::set_logging_enabled(true);
-            DittoLogger::set_minimum_log_level(level);
+            sdk::set_logging(true, level);
         }
-        Err(_) => {
-            DittoLogger::set_minimum_log_level(LogLevel::Error);
-            DittoLogger::set_logging_enabled(false);
-        }
+        Err(_) => sdk::set_logging(false, sdk::LogLevel::Error),
     }
 }
 
@@ -687,7 +666,7 @@ fn general(msg: impl Into<String>) -> TaskbookError {
     TaskbookError::General(msg.into())
 }
 
-fn ditto_err(e: DittoError) -> TaskbookError {
+fn sdk_err(e: sdk::SdkError) -> TaskbookError {
     TaskbookError::General(format!("ditto: {e}"))
 }
 
@@ -712,7 +691,7 @@ mod tests {
         let key = encrypt.then(taskbook_common::encryption::generate_key);
         DittoStorage::open(
             &settings,
-            DittoConfigConnect::SmallPeersOnly { private_key: None },
+            sdk::Connect::SmallPeersOnly { private_key: None },
             key,
             None,
             None,
@@ -808,9 +787,9 @@ mod tests {
         storage.set(&map(vec![task(1, "secret")])).unwrap();
 
         let raw = storage
-            .execute(format!("SELECT * FROM {}", storage.collection), json!({}))
+            .execute(&format!("SELECT * FROM {}", storage.collection), json!({}))
             .unwrap();
-        let doc: Doc = raw.iter().next().unwrap().deserialize_value().unwrap();
+        let doc: Doc = serde_json::from_value(raw.into_iter().next().unwrap()).unwrap();
         assert!(doc.nonce.is_some());
         assert!(!doc.payload.contains("secret"));
 
@@ -851,11 +830,11 @@ mod tests {
 
         let raw = storage
             .execute(
-                format!("SELECT * FROM {} WHERE deleted = false", storage.collection),
+                &format!("SELECT * FROM {} WHERE deleted = false", storage.collection),
                 json!({}),
             )
             .unwrap();
-        assert_eq!(raw.item_count(), 1);
+        assert_eq!(raw.len(), 1);
         assert_eq!(storage.get().unwrap()["1"].description(), "b");
     }
 
@@ -863,7 +842,7 @@ mod tests {
     fn watch_reports_changes() {
         let storage = open_local(false);
         let (tx, rx) = mpsc::channel();
-        let _watch = storage
+        let watch = storage
             .watch(Box::new(move |notice| {
                 let _ = tx.send(notice);
             }))
@@ -875,6 +854,9 @@ mod tests {
             .recv_timeout(Duration::from_secs(5))
             .expect("change notice");
         assert_eq!(notice, ChangeNotice::Archive);
+
+        // Observers must be released before the instance.
+        drop(watch);
     }
 
     #[test]
@@ -892,5 +874,11 @@ mod tests {
         let mut data = HashMap::new();
         data.insert("abc".to_string(), task(1, "x"));
         assert!(storage.set(&data).is_err());
+    }
+
+    #[test]
+    fn presence_graph_decodes_without_peers() {
+        let storage = open_local(false);
+        assert_eq!(storage.ditto.remote_peer_count().unwrap(), 0);
     }
 }

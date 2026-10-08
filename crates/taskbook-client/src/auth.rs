@@ -221,13 +221,14 @@ pub fn status() -> Result<()> {
 fn ditto_status(config: &Config) -> Result<()> {
     let ditto = &config.ditto;
     println!("Mode:    {}", "ditto".green().bold());
-    if !cfg!(feature = "ditto") {
-        println!(
+    match crate::storage::ditto_sdk_version() {
+        Some(version) => println!("SDK:     Ditto {version} (dittoffi C ABI)"),
+        None => println!(
             "{}",
             "This build of tb has no Ditto support; rebuild with `--features ditto`."
                 .red()
                 .bold()
-        );
+        ),
     }
     println!(
         "App ID:  {}",

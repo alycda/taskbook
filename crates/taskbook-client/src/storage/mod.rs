@@ -83,6 +83,18 @@ fn ditto_backend(config: &Config) -> Result<Box<dyn StorageBackend>> {
     Ok(Box::new(DittoStorage::new(&config.ditto)?))
 }
 
+/// Ditto SDK release the native bindings were built against, when compiled in.
+pub fn ditto_sdk_version() -> Option<&'static str> {
+    #[cfg(feature = "ditto")]
+    {
+        Some(ditto::sdk::SDK_VERSION)
+    }
+    #[cfg(not(feature = "ditto"))]
+    {
+        None
+    }
+}
+
 #[cfg(not(feature = "ditto"))]
 fn ditto_backend(_config: &Config) -> Result<Box<dyn StorageBackend>> {
     Err(crate::error::TaskbookError::General(

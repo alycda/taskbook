@@ -13,24 +13,37 @@ The backend is optional and compiled in with a Cargo feature:
 cargo build --release --features ditto
 ```
 
-The feature pulls in the `dittolive-ditto` crate, whose build script
-downloads a prebuilt native library (`libdittoffi`, ~165 MB static archive)
-for your target. Point `DITTOFFI_SEARCH_PATH` at a local copy for sandboxed
-builds (Nix, offline CI); `DITTO_LOCAL_BUILD=1` forbids the download.
+The feature does not use Ditto's Rust SDK crate. It binds Ditto's C ABI
+(`dittoffi`) directly from `crates/taskbook-client/src/storage/ditto/ffi.rs`
+and links the prebuilt native library that Ditto publishes per target
+(`libdittoffi.a`, ~165 MB archive, ~41 MB after linking). The crate's
+`build.rs` finds the library in this order:
 
-**Toolchain**: Rust 1.85 through 1.97. Rust 1.98 and newer reject a
-`#[repr(transparent)]` struct in the SDK's generated bindings
-(`dittolive-ditto-sys` 4.14.7 via `safer-ffi` 0.2.0-rc1) with error E0690,
-after [rust-lang/rust#155299](https://github.com/rust-lang/rust/pull/155299)
-made that check a hard error. Until Ditto ships a fixed SDK, build the
-feature with a pinned toolchain:
+1. `DITTO_SDK_DIR` — a directory containing `libdittoffi.a`.
+2. `DITTOFFI_SEARCH_PATH` — same, for parity with Ditto's own crate.
+3. The download cache: `DITTO_SDK_CACHE`, else
+   `$XDG_CACHE_HOME/taskbook/ditto-sdk` (`~/.cache/taskbook/ditto-sdk`),
+   keyed by SDK version and target.
+4. Download into that cache with `curl` from `software.ditto.live`, unless
+   `DITTO_LOCAL_BUILD=1` forbids network access (Nix, offline CI).
+
+Any stable Rust toolchain the workspace supports builds it; there is no
+toolchain pin.
+
+**ABI tracking.** The bindings are a transcription of the C header Ditto
+embeds in its C++ SDK (`Ditto.h`, include guard `__RUST_DITTOFFI__`), which
+is generated per release with no stability promise. The version is pinned
+in `build.rs` (`DITTO_SDK_VERSION`). To bump it, print the declarations the
+bindings rely on for both releases and diff them:
 
 ```bash
-rustup toolchain install 1.97.0
-cargo +1.97.0 build --release --features ditto
+scripts/ditto-abi-check.sh 4.14.7 > /tmp/abi-old.txt
+scripts/ditto-abi-check.sh 4.15.0 > /tmp/abi-new.txt
+diff /tmp/abi-old.txt /tmp/abi-new.txt
 ```
 
-The default build (without the feature) is unaffected.
+Any change in a signature or struct layout must be mirrored in `ffi.rs`
+before the version constant moves.
 
 ## Setup
 
@@ -187,6 +200,9 @@ from other devices as they arrive.
   asks for it.
 - **"this build of tb has no Ditto support"** — rebuild with
   `--features ditto`.
+- **build fails downloading the native library** — set `DITTO_SDK_DIR` to a
+  directory containing `libdittoffi.a` for your target (Ditto publishes it at
+  `https://software.ditto.live/rust/Ditto/<version>/<target>/release/`).
 - **Devices don't see each other in `peers` mode** — they need the same
   `appId`, the same `privateKeyPath` (or none on both), and a network that
   allows mDNS/multicast. `TB_DITTO_LOG=info tb` shows transport activity.
