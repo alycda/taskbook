@@ -206,7 +206,7 @@ flowchart LR
 - KTD8. **Rewrite outcome is a value, not an error.** `rewrite_on_save(baseline, draft, index)` returns either the rewritten text or a list of rejected references with reasons (not found, ambiguous prefix, divergent target). Full tokens are never rejected (R10). Callers in the TUI show the message as a status and keep the draft.
 - KTD9. **TUI keeps an active-items snapshot and a `LinkIndex` independent of the view.** `App` loads active items in every view (Archive view currently replaces `app.items`), rebuilding the index in `refresh_items`, `set_view`, the SSE handler for both active and archive changes, and after restore. Prefix uniqueness is computed over active items; an archived row's prefix is computed over active items plus itself.
 - KTD10. **A rejected submit re-opens the command line with the draft.** Submit keeps today's order (push history, deactivate, execute), because `deactivate_command_line` resets `pending_confirm` and moving it after execution would cancel the `/delete` and `/clear` confirmations. When the link rewrite rejects, the action re-activates the command line with the submitted input and cursor and sets the error status (R9). Other storage errors keep today's behavior.
-- KTD11. **Note editor saves validate first, then write once.** A new `Taskbook::edit_note_silent(id, title, body)` replaces the title-then-body pair of writes in `edit_note_external`, so a rejection can never leave a half-saved note. On rejection the editor reopens on the edited title and body, with the rejection message as a leading `//` comment line (already stripped by `parse_note_content`). The `/note` create-then-editor flow uses the same validation with an empty baseline.
+- KTD11. **Note editor saves validate title and body together before either write.** `edit_note_external` keeps its existing `edit_description_silent` plus `edit_note_body_silent` pair, but both run only after the combined rewrite succeeds, so a rejection never reaches storage. On rejection the editor reopens on the edited title and body, with the rejection message as a leading `//` comment line (already stripped by `parse_note_content`). The `/note` create-then-editor flow uses the same validation with an empty baseline.
 - KTD12. **The link keybind reuses the command line.** `l` on a selected active item opens the command line as `/edit @<id> <current description> [[` with item suggestions already showing; accepting one and pressing Enter saves through the normal rewrite path (R11). For notes the token goes on the title (the `/edit` target). No new picker widget.
 - KTD13. **`[[` autocomplete.** `update_suggestions` gains a branch, checked before the `@` branch, for an unclosed `[[` before the cursor in the description position of `/task`, `/note`, and `/edit`. Candidates: active, non-divergent items, excluding the item being edited, shown as rendered title, short stable ID, and board, matched by substring on rendered title, numeric ID, or stable-ID prefix. Accepting inserts `[[<full id>]]`. While a `[[` dropdown is open, Enter accepts instead of submitting.
 - KTD14. **Keys:** `l` link, `v` toggle the side pane, `o` move focus into the pane (`j`/`k` move, Enter jumps, `o` or Esc returns to the list). Tab and `h` are already bound. Pane visibility is session-local in v1 and starts visible.
@@ -227,7 +227,7 @@ flowchart TB
     MOD["models: Item::stable_id() computed from timestamp"]
   end
   subgraph client["taskbook-client"]
-    TB["taskbook.rs: unique creation timestamp, edit_note_silent"]
+    TB["taskbook.rs: unique creation timestamp"]
     APP["tui/app.rs: active snapshot + LinkIndex, rebuilt on refresh"]
     ACT["tui/actions.rs: save path, keys l / v / o, jump"]
     AC["tui/autocomplete.rs: [[ suggestions"]
@@ -441,13 +441,12 @@ Stable-ID derivation (directional, not a specification): `id = encode_k_to_z(mix
 **Files:**
 - `crates/taskbook-client/src/tui/actions.rs`
 - `crates/taskbook-client/src/editor.rs`
-- `crates/taskbook-client/src/taskbook.rs`
-- Tests: `crates/taskbook-client/src/tui/app.rs` tests module; `crates/taskbook-client/src/editor.rs` tests; `crates/taskbook-client/src/taskbook.rs` tests
+- Tests: `crates/taskbook-client/src/tui/app.rs` tests module; `crates/taskbook-client/src/editor.rs` tests
 
 **Approach:**
 1. Route `/task`, `/note`, and `/edit` descriptions through `rewrite_on_save` before calling `Taskbook`; baseline is empty for creates and, for `/edit`, the stored description captured at session start per KTD7 and kept on `App` across retries.
 2. On rejection, re-activate the command line with the submitted input and cursor and set the error status (KTD10); leave the submit order unchanged.
-3. Add `Taskbook::edit_note_silent(id, title, body)` as a single write and use it in `edit_note_external`.
+3. In `edit_note_external`, run the combined title-and-body rewrite before calling the existing two write methods (KTD11).
 4. Capture the stored title and body once when the editor session starts; on rejection reopen the editor on the edited content with a leading `//` message line, looping until the save succeeds or the user cancels.
 
 **Patterns to follow:** status handling for parse errors in `crates/taskbook-client/src/tui/actions.rs`; `edit_existing_note_in_editor` for re-serializing note content.
@@ -457,7 +456,7 @@ Stable-ID derivation (directional, not a specification): `id = encode_k_to_z(mix
 - Submitting `/edit @3 see [[12]]` stores the full token for item 12.
 - `/delete 3` still opens its confirmation prompt, and confirming deletes item 3.
 - Covers AE3. `/edit` of a CLI-created `see [[12]]` with an unrelated change saves with `[[12]]` still plain.
-- `edit_note_silent` writes title and body in one storage write (one `set` on a counting test backend).
+- A note edit whose body adds `[[99]]` leaves both the stored title and body unchanged.
 - Covers AE2. Editing a note whose body links an archived task saves successfully.
 - The editor retry loop: a rejected save followed by a corrected one writes once; the baseline stays the original stored text across passes.
 
@@ -613,6 +612,7 @@ These mirror CI in `.github/workflows/ci.yml`.
 
 ### Considered and not built
 
+- A single-write `edit_note_silent`: validation already happens before either write, so a rejection cannot half-save a note; a storage failure between the two writes is pre-existing and out of scope.
 - Writing derived IDs back on load: nothing is stored, so there is nothing to write; it would only race last-write-wins sync.
 - A token-to-title legend in `$EDITOR` comments: useful, but R9 only requires the message; revisit if raw IDs in the editor prove confusing.
 - Persisting pane visibility in the config: session-local is enough for v1; revisit if users toggle it every session.
