@@ -63,6 +63,24 @@ Access commands directly from the TUI with `/` or Tab.
 
 ![Commands](screenshots/commands.png)
 
+### Links and Backlinks
+Link any task or note to another, Workflowy-style. Every item has a stable
+ID (shown after its number, e.g. `3 kqzx`) derived from when it was created;
+unlike the number, it never changes when items are archived or restored.
+
+- Type `[[` while writing a task, note or edit to pick a target from a list,
+  or type `[[12]]` (a number) or `[[kq]]` (a stable-ID prefix): it is saved
+  as a full `[[stable-id]]` token. A reference that matches nothing, or more
+  than one item, is not saved and your draft is kept.
+- Press `l` on an item to link it to another without editing text.
+- On terminals at least 100 columns wide, a side pane lists the selected
+  item's links and backlinks; `v` toggles it, `o` focuses it, Enter jumps.
+- Links to archived items show as broken (`✗`) until the item is restored.
+  Two items created in the same millisecond by older tools share an ID and
+  show `??`; they cannot be linked to.
+
+The CLI, MCP server and sync server show `[[stable-id]]` tokens as raw text.
+
 ### Help
 Full keyboard shortcut reference available with `?`.
 
