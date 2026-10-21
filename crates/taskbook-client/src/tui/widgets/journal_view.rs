@@ -11,6 +11,7 @@ use ratatui::{
 use crate::tui::app::App;
 use taskbook_common::{board, StorageItem};
 
+use super::item_row::{body_preview, text_spans};
 use super::render_scrollable_list;
 
 pub fn render_journal_view(frame: &mut Frame, app: &App, area: Rect) {
@@ -145,21 +146,13 @@ pub fn render_journal_view(frame: &mut Frame, app: &App, area: Rect) {
                 title_spans.push(Span::styled("● ", app.theme.info));
             }
 
-            title_spans.push(Span::styled(item.description().to_string(), desc_style));
+            title_spans.extend(text_spans(app, item.description(), desc_style));
 
             // Inline note body preview (first line, truncated)
-            if let Some(note) = item.as_note() {
-                if let Some(body) = note.body() {
-                    if let Some(first_line) = body.lines().next() {
-                        let preview = if first_line.len() > 50 {
-                            format!("  {}…", &first_line[..50])
-                        } else if body.lines().count() > 1 {
-                            format!("  {}…", first_line)
-                        } else {
-                            format!("  {}", first_line)
-                        };
-                        title_spans.push(Span::styled(preview, app.theme.muted));
-                    }
+            if let Some(body) = item.note_body() {
+                let preview = body_preview(app, body);
+                if !preview.is_empty() {
+                    title_spans.push(Span::styled(preview, app.theme.muted));
                 }
             }
 

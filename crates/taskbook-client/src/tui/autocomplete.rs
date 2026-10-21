@@ -1,4 +1,5 @@
 use super::app::{App, Suggestion, SuggestionKind};
+use super::widgets::item_row::plain_text;
 use taskbook_common::board;
 
 /// Static list of all slash commands with descriptions
@@ -170,23 +171,19 @@ fn suggest_items(app: &mut App, partial: &str) {
         .rposition(|c| *c == ' ')
         .unwrap_or(0);
 
-    // Collect and sort by ID for stable ordering
-    let mut matches: Vec<(u64, &str, bool, bool, bool)> = app
+    // Collect and sort by ID for stable ordering; match the text as it
+    // renders, so link tokens are searched by their titles
+    let mut matches: Vec<(u64, String, bool, bool, bool)> = app
         .items
         .values()
-        .filter(|item| item.description().to_lowercase().contains(&partial_lower))
-        .map(|item| {
+        .map(|item| (item, plain_text(app, item.description())))
+        .filter(|(_, desc)| desc.to_lowercase().contains(&partial_lower))
+        .map(|(item, desc)| {
             let (is_complete, in_progress) = match item {
                 taskbook_common::StorageItem::Task(t) => (t.is_complete, t.in_progress),
                 taskbook_common::StorageItem::Note(_) => (false, false),
             };
-            (
-                item.id(),
-                item.description(),
-                item.is_task(),
-                is_complete,
-                in_progress,
-            )
+            (item.id(), desc, item.is_task(), is_complete, in_progress)
         })
         .collect();
     matches.sort_by_key(|(id, _, _, _, _)| *id);
@@ -203,7 +200,7 @@ fn suggest_items(app: &mut App, partial: &str) {
         };
 
         // Truncate description for display
-        let display: String = if desc.len() > 35 {
+        let display: String = if desc.chars().count() > 35 {
             format!("{}…", desc.chars().take(34).collect::<String>())
         } else {
             desc.to_string()
