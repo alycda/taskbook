@@ -419,14 +419,13 @@ Stable-ID derivation (directional, not a specification): `id = encode_k_to_z(mix
 **Approach:**
 1. Add an `App::with_taskbook(Taskbook, Config, config_path)` test constructor, and route every `self.config.save()` in `App` (`set_view`, `toggle_hide_completed`, `cycle_sort_method`) through a helper that writes to that path, so tests never touch `~/.config/taskbook/taskbook.json`.
 2. Add the active snapshot and `LinkIndex` to `App`; rebuild in `refresh_items`, `set_view`, after restore, and in the SSE handler for both data and archive changes.
-3. Make restore reload the archive list and the index explicitly; `r` on a row that no longer exists sets a status instead of returning an error.
+3. Make restore reload the archive list and the index explicitly (`set_view(Archive)` is a no-op while already in Archive view), so the restored row disappears at once.
 
 **Patterns to follow:** existing `refresh_items` and SSE `DataChanged` handling.
 
 **Test scenarios:**
 - Covers AE5. Create A, B, C linking to T; delete T: index shows three broken links, T appears in no active backlink list, and inbound links for T's ID still return A, B, C; restore T from the archive view: index shows three backlinks on T without any other action.
 - In Archive view, the index still reflects active items, not archived ones.
-- Pressing restore twice on the same archived row leaves the TUI running and shows a status.
 
 **Verification:** switching views never empties the side pane's source data.
 
@@ -608,6 +607,7 @@ These mirror CI in `.github/workflows/ci.yml`.
 - Automatic repair of divergent items (bumping one twin's timestamp).
 - Handling a non-zero `$EDITOR` exit as a cancel instead of an error that closes the TUI (pre-existing behavior).
 - A "jump back" key after following a link.
+- Making `r` on a stale archived row set a status instead of an error (pre-existing; the explicit reload in U5 removes the stale row).
 - Matching `/search` against rendered titles.
 
 ### Considered and not built
