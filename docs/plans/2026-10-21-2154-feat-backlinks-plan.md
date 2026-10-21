@@ -75,7 +75,7 @@ Because sync stores items as opaque client-encrypted blobs and replaces the whol
 
 - R13. TUI item rows render each link token as the target's current title, visually marked as a link, instead of the raw ID.
 - R14. A side pane shows the selected item's outgoing links and its backlinks (active items whose text links to it), each as title plus short stable ID, and updates as the selection moves.
-- R15. From the side pane the user can jump to any listed item, and the TUI switches board or view as needed so that item is selected and visible.
+- R15. From the side pane the user can jump to any listed item that is active and not divergent, and the TUI switches board or view as needed so that item is selected and visible.
 - R16. A link whose target is archived or absent renders as a broken-link marker, archived items contribute no backlinks, and restoring an item makes its backlinks and outgoing links resolve again with no other action.
 - R17. The side pane can be toggled with a key and is hidden automatically when the terminal is narrower than a minimum width.
 
