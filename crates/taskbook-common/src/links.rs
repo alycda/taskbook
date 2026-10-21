@@ -36,8 +36,7 @@ pub struct Span {
     pub kind: SpanKind,
 }
 
-/// Find every closed `[[…]]` span. Spans never contain a newline, so a note
-/// title and body joined by `\n` cannot produce a span across the two.
+/// Find every closed `[[…]]` span. Spans never contain a newline.
 pub fn scan(text: &str) -> Vec<Span> {
     let mut spans = Vec::new();
     let mut i = 0;
