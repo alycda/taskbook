@@ -59,7 +59,7 @@ Because sync stores items as opaque client-encrypted blobs and replaces the whol
 
 - R7. A link is a `[[<full stable ID>]]` token in a task description, note title, or note body; only well-formed full stable-ID tokens are links, and any other `[[…]]` in stored text is plain text.
 - R8. When text is saved from TUI input or from the TUI-launched `$EDITOR`, each `[[N]]` (numeric) and `[[<prefix>]]` (stable-ID prefix) added in this edit is rewritten to the full stable-ID token of the matching active item; such spans already present in the text before the edit stay verbatim as plain text.
-- R9. A save that adds a numeric or prefix reference matching no active item, or more than one, is rejected with a message naming the reference, and nothing is written.
+- R9. A save that adds a numeric or prefix reference matching no active item, or more than one, is rejected with a message naming the reference, nothing is written, and the user's draft is kept: TUI input stays open with its text, and `$EDITOR` reopens on the edited content.
 - R10. Full stable-ID tokens already in the text are preserved verbatim on save, whatever the state of their target.
 - R11. A TUI keybind on the selected item lets the user pick a target item and appends a link token to the selected item's description without manual text editing.
 - R12. Typing `[[` in TUI text input opens item autocomplete, and accepting a suggestion inserts the full stable-ID token.
