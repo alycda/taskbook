@@ -56,7 +56,7 @@ Because sync stores items as opaque client-encrypted blobs and replaces the whol
 - R1. Every task and note has a stable ID that is assigned once and never changes across edit, move, star, state change, archive, restore, or sync.
 - R2. Stable IDs use a letters-only alphabet, so no stable ID or prefix of one can be read as a numeric ID.
 - R3. Every stable ID is a deterministic function of the item's creation timestamp alone, computed whenever the item is read and never stored, so every client and every version that keeps `_timestamp` agrees on it.
-- R19. Creating an item gives it a creation timestamp that no other active or archived item has, so new items never share a stable ID.
+- R19. Creating an item gives it a creation timestamp that no other active or archived item in this store has, so items created on this client never share a stable ID; ties created on other devices are divergent per R20.
 - R20. Items that already share a creation timestamp are divergent: the TUI marks them, they are not jump targets, and a save that adds a reference to one is rejected per R9.
 - R4. Numeric IDs keep their current allocation and behavior for every existing CLI, TUI, and MCP operation.
 - R5. Older taskbook-rs versions can still read item data written by this version.
