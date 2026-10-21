@@ -297,7 +297,7 @@ pub enum Segment {
     },
 }
 
-/// Outgoing links, backlinks, display prefixes and rendering over the active
+/// Backlinks, targets, display prefixes and rendering over the active
 /// items, rebuilt whenever the item set changes.
 #[derive(Debug, Default)]
 pub struct LinkIndex {
@@ -305,7 +305,6 @@ pub struct LinkIndex {
     titles: HashMap<String, String>,
     numeric_by_id: HashMap<String, u64>,
     prefix_lens: HashMap<String, usize>,
-    outgoing: HashMap<u64, Vec<String>>,
     inbound: HashMap<String, Vec<u64>>,
 }
 
@@ -319,18 +318,18 @@ impl LinkIndex {
 
         let mut titles = HashMap::new();
         let mut numeric_by_id = HashMap::new();
-        let mut outgoing = HashMap::new();
         let mut inbound: HashMap<String, Vec<u64>> = HashMap::new();
         for item in &items {
             let own_id = item.stable_id();
             titles.insert(own_id.clone(), item.description().to_string());
             numeric_by_id.insert(own_id.clone(), item.id());
 
-            let targets = item_link_targets(item);
-            for id in targets.iter().filter(|id| **id != own_id) {
-                inbound.entry(id.clone()).or_default().push(item.id());
+            for id in item_link_targets(item)
+                .into_iter()
+                .filter(|id| *id != own_id)
+            {
+                inbound.entry(id).or_default().push(item.id());
             }
-            outgoing.insert(item.id(), targets);
         }
         for sources in inbound.values_mut() {
             sources.sort_unstable();
@@ -345,7 +344,6 @@ impl LinkIndex {
             titles,
             numeric_by_id,
             prefix_lens,
-            outgoing,
             inbound,
         }
     }
@@ -361,11 +359,6 @@ impl LinkIndex {
         self.numeric_by_id
             .get(id)
             .map_or(Target::Missing, |&numeric| Target::Active { numeric })
-    }
-
-    /// Stable IDs the active item `numeric` links to.
-    pub fn outgoing(&self, numeric: u64) -> &[String] {
-        self.outgoing.get(&numeric).map_or(&[], Vec::as_slice)
     }
 
     /// Active items (numeric IDs, ascending) whose text links to `id`,
@@ -699,7 +692,7 @@ mod tests {
         let idx = LinkIndex::build(items.iter());
         let (ida, idb) = (stable_id::from_timestamp(a), stable_id::from_timestamp(b));
 
-        assert_eq!(idx.outgoing(1), [idb.clone(), ida.clone()]);
+        assert_eq!(item_link_targets(&items[0]), [idb.clone(), ida.clone()]);
         assert_eq!(idx.backlinks(&idb), [1]);
         assert!(idx.backlinks(&ida).is_empty());
     }
