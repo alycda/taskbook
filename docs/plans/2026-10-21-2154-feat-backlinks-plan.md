@@ -389,12 +389,12 @@ Stable-ID derivation (directional, not a specification): `id = encode_k_to_z(mix
 
 **Approach:**
 1. `LinkIndex::build(active items)` computes ID→items, divergent set, prefix lengths, and per-item outgoing targets from description, title, and body.
-2. Backlinks are the reverse map, deduplicated, excluding self.
+2. Backlinks are a reverse map keyed by target stable ID, including IDs with no active item, deduplicated and excluding self; active items look up their own ID, and an archived item selected in Archive view looks up its ID the same way (KTD17).
 3. A render function turns text into segments (plain, link with resolved title, broken, divergent) with one level of substitution; callers style the segments.
 
 **Test scenarios:**
 - Item A links B twice and itself once: A's outgoing lists B and A once each; B's backlinks list A; A's backlinks do not list A.
-- A links to an ID not in the active set: outgoing shows it as broken, and no backlink is created anywhere.
+- A links to an ID not in the active set: outgoing shows it as broken, no active item gains a backlink, and looking up that ID's inbound links returns A.
 - Covers AE5 (index half). Building with B removed (archived) makes A's link broken; rebuilding with B present again restores the backlink.
 - Two active items share an ID: the ID is in the divergent set and renders with the divergent marker.
 - A titled "see [[B]]" and B titled "re [[A]]": rendering A shows B's title with A as a short ID, without recursion.
@@ -424,7 +424,7 @@ Stable-ID derivation (directional, not a specification): `id = encode_k_to_z(mix
 **Patterns to follow:** existing `refresh_items` and SSE `DataChanged` handling.
 
 **Test scenarios:**
-- Covers AE5. Create A, B, C linking to T; delete T: index shows three broken links and T has no backlinks; restore T from the archive view: index shows three backlinks on T without any other action.
+- Covers AE5. Create A, B, C linking to T; delete T: index shows three broken links, T appears in no active backlink list, and inbound links for T's ID still return A, B, C; restore T from the archive view: index shows three backlinks on T without any other action.
 - In Archive view, the index still reflects active items, not archived ones.
 - Pressing restore twice on the same archived row leaves the TUI running and shows a status.
 
@@ -551,6 +551,7 @@ Stable-ID derivation (directional, not a specification): `id = encode_k_to_z(mix
 - Broken and divergent entries are not jumpable.
 - Covers AE6. At 80 columns the pane is not rendered even when toggled on; at 120 columns it is.
 - Pane cursor clamps when a refresh shortens its list.
+- Selecting archived T in Archive view lists A, B, C under backlinks.
 
 **Verification:** manual walkthrough of F3 in a real terminal at both widths.
 
