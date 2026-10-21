@@ -620,6 +620,7 @@ These mirror CI in `.github/workflows/ci.yml`.
 - A "jump back" key after following a link.
 - Making `r` on a stale archived row set a status instead of an error (pre-existing; the explicit reload in U5 removes the stale row).
 - Matching `/search` against rendered titles.
+- Saving text that already holds an unclosed `[[` (written from the CLI or MCP) after `e`: under KTD13, Enter in that position only shows the hint, and Esc with no dropdown cancels the edit, so the hint's "press Esc" discards the draft. Candidate fix: Esc always dismisses an unclosed `[[`, Enter on a dismissed `[[` submits, and the `e` prefill pre-dismisses one from stored text.
 
 ### Considered and not built
 
