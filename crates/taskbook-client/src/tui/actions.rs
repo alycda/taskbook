@@ -1075,6 +1075,48 @@ mod tests {
     }
 
     #[test]
+    fn retry_keeps_the_baseline_when_storage_changes_mid_edit() {
+        let (mut app, _) = test_app();
+        let id = create(&mut app, "a");
+        submit(&mut app, &format!("/edit @{id} a [[99]]"));
+        assert!(app.command_line.focused);
+
+        // Another writer adds the same span while the draft is open. Diffed
+        // against storage it would look pre-existing; it was added here.
+        app.taskbook
+            .edit_description_silent(id, "a [[99]]")
+            .unwrap();
+        app.refresh_items().unwrap();
+
+        press(&mut app, KeyCode::Enter);
+        assert!(app.command_line.focused);
+        assert!(
+            status(&app).contains("[[99]] not found"),
+            "{}",
+            status(&app)
+        );
+    }
+
+    #[test]
+    fn retargeted_edit_takes_the_baseline_from_the_new_item() {
+        let (mut app, _) = test_app();
+        create(&mut app, "other");
+        let first = create(&mut app, "x");
+        let second = create(&mut app, "see [[1]]");
+        app.selected_index = app.display_order.iter().position(|&i| i == first).unwrap();
+
+        // Prefill an edit of `first`, then point it at `second` instead.
+        handle_key_event(&mut app, key('e')).unwrap();
+        let input = format!("/edit @{second} see [[1]] more");
+        app.command_line.cursor = input.chars().count();
+        app.command_line.input = input;
+        press(&mut app, KeyCode::Enter);
+
+        // [[1]] was already in `second`, so it stays plain text.
+        assert_eq!(description(&app, second), "see [[1]] more");
+    }
+
+    #[test]
     fn enter_on_an_archived_note_does_not_edit_active_storage() {
         let (mut app, _) = test_app();
         let kept = create(&mut app, "keep me");
