@@ -351,7 +351,7 @@ fn execute_command(
                 .map(|b| board::normalize_board_name(&b))
                 .or_else(|| app.filter.board_filter.clone())
                 .unwrap_or_else(|| "my board".to_string());
-            app.taskbook.create_note_direct_with_tags(
+            let new_id = app.taskbook.create_note_direct_with_tags(
                 vec![board_name.clone()],
                 rewrite.text.clone(),
                 tags,
@@ -366,14 +366,7 @@ fn execute_command(
             app.set_status(message, StatusKind::Success);
 
             // Open editor for the newly created note
-            // Find the highest ID note (just created)
-            if let Some(max_id) = app.items.values().map(|i| i.id()).max() {
-                if let Some(item) = app.items.get(&max_id.to_string()) {
-                    if !item.is_task() {
-                        edit_note_external(app, max_id)?;
-                    }
-                }
-            }
+            edit_note_external(app, new_id)?;
         }
         ParsedCommand::Edit { id, description } => {
             // The baseline is captured once per edit session: from the `e`/`l`
@@ -532,7 +525,9 @@ fn handle_shortcut_key(app: &mut App, key: KeyEvent) -> Result<()> {
         // Enter to open note in editor or filter by board
         KeyCode::Enter => {
             if let Some(item) = app.selected_item() {
-                if !item.is_task() {
+                if !item.is_task() && app.view == ViewMode::Archive {
+                    app.set_status("Restore the note to edit it".to_string(), StatusKind::Info);
+                } else if !item.is_task() {
                     edit_note_external(app, item.id())?;
                 } else if app.view == ViewMode::Board && app.filter.board_filter.is_none() {
                     if let Some(board_name) = app.get_board_for_selected() {
@@ -903,7 +898,8 @@ fn rename_board(app: &mut App, old_name: &str, new_name: &str) -> Result<()> {
 }
 
 fn edit_note_external(app: &mut App, id: u64) -> Result<()> {
-    let item = app.items.get(&id.to_string());
+    // Edits write to active storage, so read the note from there whatever the view.
+    let item = app.active_items.get(&id.to_string());
     let note = match item.and_then(|i| i.as_note()) {
         Some(n) => n,
         None => {
@@ -1076,6 +1072,24 @@ mod tests {
         press(&mut app, KeyCode::Enter);
         assert!(app.command_line.focused);
         assert_eq!(description(&app, id), "a");
+    }
+
+    #[test]
+    fn enter_on_an_archived_note_does_not_edit_active_storage() {
+        let (mut app, _) = test_app();
+        let kept = create(&mut app, "keep me");
+        let note = app
+            .taskbook
+            .create_note_direct_with_tags(vec!["my board".into()], "old note".into(), vec![])
+            .unwrap();
+        app.taskbook.delete_items_silent(&[note]).unwrap();
+        app.set_view(ViewMode::Archive).unwrap();
+        assert!(!app.items.is_empty());
+
+        press(&mut app, KeyCode::Enter);
+
+        assert_eq!(status(&app), "Restore the note to edit it");
+        assert_eq!(description(&app, kept), "keep me");
     }
 
     #[test]
