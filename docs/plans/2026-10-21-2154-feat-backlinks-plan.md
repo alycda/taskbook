@@ -58,8 +58,8 @@ Because sync stores items as opaque client-encrypted blobs and replaces the whol
 **Writing links**
 
 - R7. A link is a `[[<full stable ID>]]` token in a task description, note title, or note body; only well-formed full stable-ID tokens are links, and any other `[[…]]` in stored text is plain text.
-- R8. When text is saved from TUI input or from the TUI-launched `$EDITOR`, each `[[N]]` (numeric) and `[[<prefix>]]` (stable-ID prefix) is rewritten to the full stable-ID token of the matching active item.
-- R9. A save that contains a numeric or prefix reference matching no active item, or more than one, is rejected with a message naming the reference, and nothing is written.
+- R8. When text is saved from TUI input or from the TUI-launched `$EDITOR`, each `[[N]]` (numeric) and `[[<prefix>]]` (stable-ID prefix) added in this edit is rewritten to the full stable-ID token of the matching active item; such spans already present in the text before the edit stay verbatim as plain text.
+- R9. A save that adds a numeric or prefix reference matching no active item, or more than one, is rejected with a message naming the reference, and nothing is written.
 - R10. Full stable-ID tokens already in the text are preserved verbatim on save, whatever the state of their target.
 - R11. A TUI keybind on the selected item lets the user pick a target item and appends a link token to the selected item's description without manual text editing.
 - R12. Typing `[[` in TUI text input opens item autocomplete, and accepting a suggestion inserts the full stable-ID token.
@@ -127,10 +127,10 @@ flowchart LR
   - **Given** a note body containing a full-ID link to an archived task.
   - **When** the user edits an unrelated line of the note in `$EDITOR` and saves.
   - **Then** the save succeeds, the token is unchanged, and the link still renders as broken.
-- AE3. **Covers R7, R18.**
+- AE3. **Covers R7, R8, R9, R18.**
   - **Given** a task created via the CLI as `tb --task "see [[12]]"`.
-  - **When** it is viewed in the TUI.
-  - **Then** `[[12]]` is plain text, not a link, and no backlink appears on item 12.
+  - **When** it is viewed in the TUI, and later edited there (for example, a typo fix elsewhere in the text) and saved.
+  - **Then** `[[12]]` stays plain text, not a link, both times; the edit saves normally and no backlink appears on item 12.
 - AE4. **Covers R3.**
   - **Given** two synced clients holding the same pre-upgrade items.
   - **When** both upgrade and load before either syncs.
