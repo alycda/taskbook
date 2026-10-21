@@ -208,7 +208,7 @@ flowchart LR
 - KTD10. **A rejected submit re-opens the command line with the draft.** Submit keeps today's order (push history, deactivate, execute), because `deactivate_command_line` resets `pending_confirm` and moving it after execution would cancel the `/delete` and `/clear` confirmations. When the link rewrite rejects, the action re-activates the command line with the submitted input and cursor and sets the error status (R9). Other storage errors keep today's behavior.
 - KTD11. **Note editor saves validate title and body together before either write.** `edit_note_external` keeps its existing `edit_description_silent` plus `edit_note_body_silent` pair, but both run only after the combined rewrite succeeds, so a rejection never reaches storage. On rejection the editor reopens on the edited title and body, with the rejection message as a leading `//` comment line (already stripped by `parse_note_content`). The `/note` create-then-editor flow uses the same validation with an empty baseline.
 - KTD12. **The link keybind reuses the command line.** `l` on a selected active item opens the command line as `/edit @<id> <current description> [[` with item suggestions already showing; accepting one and pressing Enter saves through the normal rewrite path (R11). For notes the token goes on the title (the `/edit` target). No new picker widget.
-- KTD13. **`[[` autocomplete.** `update_suggestions` gains a branch, checked before the `@` branch, for an unclosed `[[` before the cursor in the description position of `/task`, `/note`, and `/edit`. Candidates: active, non-divergent items, excluding the item being edited, shown as rendered title, short stable ID, and board, matched by substring on rendered title, numeric ID, or stable-ID prefix. Accepting inserts `[[<full id>]]`. While a `[[` dropdown is open, Enter accepts instead of submitting.
+- KTD13. **`[[` autocomplete.** `update_suggestions` gains a branch, checked before the `@` branch, for an unclosed `[[` before the cursor in the description position of `/task`, `/note`, and `/edit`. Candidates: active, non-divergent items, excluding the item being edited, shown as rendered title, short stable ID, and board, matched by substring on rendered title, numeric ID, or stable-ID prefix. Accepting inserts `[[<full id>]]`. While a `[[` dropdown is open, Enter accepts instead of submitting. An empty `[[` query lists active, non-divergent items newest first, current board first, so the `l` flow opens on useful candidates (today an empty query suggests nothing). The first row is pre-selected whenever a `[[` dropdown opens. Each row shows the rendered title truncated to fit the dropdown, then the short stable ID, with the board as the description. Enter is decided by context, not by whether rows are showing: while an unclosed `[[` sits before the cursor in a description position, Enter accepts the selected row if there is one and otherwise does not submit, setting a hint to pick an item, close the brackets, or press Esc. Esc inside an open `[[` dropdown closes only the dropdown, which stays closed until the cursor leaves that `[[`; a second Esc cancels the command line as today.
 - KTD14. **Keys:** `l` link, `v` toggle the side pane, `o` move focus into the pane (`j`/`k` move, Enter jumps, `o` or Esc returns to the list). Tab and `h` are already bound. Pane visibility is session-local in v1 and starts visible.
 - KTD15. **Jump does not touch saved settings.** Jumping clears the search term and board filter, switches Archive view to Board view through a non-persisting path, and reveals a completed target with a transient override instead of flipping the persisted hide-completed setting; a status line names what changed. Broken and divergent entries are listed but not jumpable (R15, R16, R20).
 - KTD16. **Rendering substitutes one level.** A token renders as the target's current title; tokens inside that title render as short stable IDs, so cycles cannot recurse. Broken tokens render as the short ID with a broken marker; divergent ones with a `??` suffix, as jj does. The same render function feeds rows, the pane, suggestions, and the journal preview (which also moves from byte to character truncation).
@@ -506,7 +506,7 @@ Stable-ID derivation (directional, not a specification): `id = encode_k_to_z(mix
 
 **Approach:**
 1. Add the `[[` branch to `update_suggestions` before the `@` branch, with a link suggestion kind and icon.
-2. While a `[[` dropdown is open, make Enter accept; Esc closes the dropdown.
+2. Implement the KTD13 Enter and Esc rules for an unclosed `[[`, and the empty-query ordering.
 3. Bind `l` (not in Archive view) to open `/edit @<id> <description> [[` with suggestions active.
 4. Add `l`, `v`, and `o` to the help popup.
 
@@ -515,6 +515,9 @@ Stable-ID derivation (directional, not a specification): `id = encode_k_to_z(mix
 - Suggestions exclude the item being edited and divergent items.
 - Matching by numeric ID and by stable-ID prefix both work.
 - Enter with the `[[` dropdown open accepts the suggestion instead of submitting.
+- Pressing `l`, typing a query that matches nothing, then pressing Enter leaves the stored description unchanged and shows the hint.
+- An empty `[[` query lists recent items with the first row pre-selected.
+- Esc with a `[[` dropdown open closes only the dropdown; a second Esc cancels the command line.
 - Covers F2. Pressing `l` on item 4 opens `/edit @4 <its description> [[` with suggestions visible.
 
 **Verification:** existing `@board` and item autocomplete behaves as before.
