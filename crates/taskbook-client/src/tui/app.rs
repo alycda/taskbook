@@ -135,6 +135,8 @@ pub struct CommandLineState {
     /// Stored text of the item being edited when this edit session began,
     /// so retries after a rejected save diff against the same baseline
     pub link_baseline: Option<(u64, String)>,
+    /// Char index of the `[[` whose link dropdown the user closed with Esc
+    pub link_dismissed_at: Option<usize>,
 }
 
 /// An autocomplete suggestion
@@ -155,6 +157,8 @@ pub enum SuggestionKind {
     Command,
     Board,
     Item,
+    /// A `[[` link target
+    Link,
 }
 
 /// An action waiting for confirmation

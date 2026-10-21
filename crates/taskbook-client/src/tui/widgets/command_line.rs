@@ -158,6 +158,7 @@ pub fn render_autocomplete(frame: &mut Frame, app: &App, content_area: Rect) {
             SuggestionKind::Command => "/",
             SuggestionKind::Board => "@",
             SuggestionKind::Item => "·",
+            SuggestionKind::Link => "[",
         };
 
         let mut spans = vec![

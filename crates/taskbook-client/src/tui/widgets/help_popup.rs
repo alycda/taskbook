@@ -52,6 +52,16 @@ pub fn render_help_popup(frame: &mut Frame, app: &App, scroll: u16) {
             Span::styled("Filter board / Edit note", desc_style),
         ]),
         Line::from(""),
+        Line::from(Span::styled("  Links", section_style)),
+        Line::from(vec![
+            Span::styled("    [[           ", key_style),
+            Span::styled("Link an item while typing", desc_style),
+        ]),
+        Line::from(vec![
+            Span::styled("    l            ", key_style),
+            Span::styled("Link selected item to another", desc_style),
+        ]),
+        Line::from(""),
         Line::from(Span::styled("  Quick Actions", section_style)),
         Line::from(vec![
             Span::styled("    c            ", key_style),

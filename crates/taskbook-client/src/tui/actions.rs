@@ -5,7 +5,7 @@ use crate::error::Result;
 use taskbook_common::board;
 use taskbook_common::links::{self, Rejection, Rewrite};
 
-use super::app::{App, PendingAction, PopupState, StatusKind, ViewMode};
+use super::app::{App, PendingAction, PopupState, StatusKind, SuggestionKind, ViewMode};
 use super::autocomplete;
 use super::command_parser::{self, ParsedCommand};
 use super::input_handler::{handle_text_input, InputResult};
@@ -138,6 +138,36 @@ fn handle_command_line_key(app: &mut App, key: KeyEvent) -> Result<()> {
             return Ok(());
         }
         _ => {}
+    }
+
+    // Inside an unclosed `[[`, Enter picks a link target instead of
+    // submitting, and Esc first closes only the dropdown.
+    if let Some((open, _)) = autocomplete::open_link_query(app) {
+        let has_links = app
+            .command_line
+            .suggestions
+            .iter()
+            .any(|s| s.kind == SuggestionKind::Link);
+        match key.code {
+            KeyCode::Enter => {
+                if has_links {
+                    accept_suggestion(app);
+                } else {
+                    app.set_status(
+                        "Pick an item, close the brackets with ]], or press Esc".to_string(),
+                        StatusKind::Info,
+                    );
+                }
+                return Ok(());
+            }
+            KeyCode::Esc if has_links => {
+                app.command_line.suggestions.clear();
+                app.command_line.selected_suggestion = None;
+                app.command_line.link_dismissed_at = Some(open);
+                return Ok(());
+            }
+            _ => {}
+        }
     }
 
     // Use the existing text input handler for editing
@@ -520,6 +550,15 @@ fn handle_shortcut_key(app: &mut App, key: KeyEvent) -> Result<()> {
                 let desc = item.description().to_string();
                 app.activate_command_line(&format!("/edit @{} {}", id, desc));
                 app.command_line.link_baseline = Some((id, desc));
+            }
+        }
+        KeyCode::Char('l') if app.view != ViewMode::Archive => {
+            if let Some(item) = app.selected_item() {
+                let id = item.id();
+                let desc = item.description().to_string();
+                app.activate_command_line(&format!("/edit @{} {} [[", id, desc));
+                app.command_line.link_baseline = Some((id, desc));
+                autocomplete::update_suggestions(app);
             }
         }
         KeyCode::Char('m') if app.view != ViewMode::Archive => {
