@@ -784,7 +784,7 @@ impl Taskbook {
             .ok_or_else(|| TaskbookError::General("Item is not a note".to_string()))?;
 
         // Open editor with current content
-        let content = editor::edit_existing_note_in_editor(note.title(), note.body())?;
+        let content = editor::edit_existing_note_in_editor(note.title(), note.body(), None)?;
 
         match content {
             Some(note_content) => {

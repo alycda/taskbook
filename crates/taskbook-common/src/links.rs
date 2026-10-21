@@ -420,6 +420,12 @@ impl LinkIndex {
         segments
     }
 
+    /// The current title of the active item with this stable ID, with its own
+    /// tokens shown as short IDs.
+    pub fn title(&self, id: &str) -> Option<String> {
+        self.titles.contains_key(id).then(|| self.flat_title(id))
+    }
+
     /// A target's title with its own tokens shown as short IDs.
     fn flat_title(&self, id: &str) -> String {
         let title = self.titles.get(id).map_or("", String::as_str);

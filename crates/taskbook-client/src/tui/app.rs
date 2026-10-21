@@ -90,6 +90,8 @@ pub struct App {
     pub needs_full_redraw: bool,
     /// Last known content area height (updated each render frame)
     pub content_height: u16,
+    /// Last known status line width (updated each render frame)
+    pub status_width: u16,
     /// Command history (most recent last)
     pub command_history: Vec<String>,
     /// Current position when browsing history (None = not browsing)
@@ -130,6 +132,9 @@ pub struct CommandLineState {
     pub selected_suggestion: Option<usize>,
     /// Pending confirmation action
     pub pending_confirm: Option<PendingAction>,
+    /// Stored text of the item being edited when this edit session began,
+    /// so retries after a rejected save diff against the same baseline
+    pub link_baseline: Option<(u64, String)>,
 }
 
 /// An autocomplete suggestion
@@ -175,6 +180,8 @@ pub struct StatusMessage {
     pub text: String,
     pub kind: StatusKind,
     pub expires_at: Instant,
+    /// Stays until the next key press instead of expiring
+    pub sticky: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -226,6 +233,7 @@ impl App {
             display_order: Vec::new(),
             needs_full_redraw: false,
             content_height: 20,
+            status_width: 80,
             command_history: Vec::new(),
             history_index: None,
             history_saved_input: String::new(),
@@ -511,14 +519,23 @@ impl App {
             text,
             kind,
             expires_at: Instant::now() + Duration::from_secs(3),
+            sticky: false,
         });
+    }
+
+    /// Set a status message that stays until the next key press
+    pub fn set_sticky_status(&mut self, text: String, kind: StatusKind) {
+        self.set_status(text, kind);
+        if let Some(msg) = self.status_message.as_mut() {
+            msg.sticky = true;
+        }
     }
 
     /// Tick - called periodically for time-based updates
     pub fn tick(&mut self) {
         // Clear expired status messages
         if let Some(ref msg) = self.status_message {
-            if Instant::now() >= msg.expires_at {
+            if !msg.sticky && Instant::now() >= msg.expires_at {
                 self.status_message = None;
             }
         }
@@ -560,6 +577,7 @@ impl App {
         self.command_line.suggestions.clear();
         self.command_line.selected_suggestion = None;
         self.command_line.pending_confirm = None;
+        self.command_line.link_baseline = None;
     }
 
     /// Deactivate the command line and clear state

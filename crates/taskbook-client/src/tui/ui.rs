@@ -28,6 +28,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         .split(frame.area());
 
     app.content_height = chunks[1].height;
+    app.status_width = chunks[3].width;
     render_header(frame, app, chunks[0]);
     render_content(frame, app, chunks[1]);
     render_command_line(frame, app, chunks[2]);
