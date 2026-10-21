@@ -178,6 +178,7 @@ flowchart LR
 - Stable-ID length and exact alphabet, and how a derived ID that collides with an existing one is handled.
 - Which immutable creation fields drive the derivation (`_timestamp` and `_isTask` are the only ones that never change today), and how two items with the same creation timestamp get distinct IDs.
 - Whether R11's appended token goes into a note's title or body.
+- Candidate format, match rule, and cancel behavior shared by the link picker (R11) and `[[` autocomplete (R12): one format of title, short stable ID, and board; active items only.
 - Side-pane focus model and keybinds (switching focus between list and pane, the link keybind, the toggle key), and the minimum-width threshold.
 - How the `[[` autocomplete trigger fits the existing autocomplete, which today runs only for `/`-prefixed command input.
 - Whether a self-link or a repeated link to the same target is shown once or per occurrence.
