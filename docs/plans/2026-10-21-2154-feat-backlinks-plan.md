@@ -12,7 +12,7 @@ execution: code
 
 ## Goal Capsule
 
-- **Objective:** In the TUI, a user can link any task or note to another with an inline `[[…]]` reference, see from any item what it links to and what links to it, and jump between them, with links that keep working through edits, moves, archive, restore, and sync.
+- **Objective:** In the TUI, a user can link any task or note to another with an inline `[[…]]` reference, see from any item what it links to and what links to it, and jump between them, with links that survive edits, moves, archive, restore, and sync; a link to an archived item shows as broken until that item is restored.
 - **Product authority:** This Product Contract. CLI, MCP, and server behavior are explicitly out of active scope (R18).
 - **Open blockers:** None. Node.js taskbook compatibility is an unverified assumption, not a blocker (see Dependencies / Assumptions).
 
