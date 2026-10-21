@@ -202,7 +202,7 @@ flowchart LR
 - KTD4. **Divergence is detected, not repaired.** The link index groups active items by stable ID; any ID held by more than one active item is divergent (R20). An archived copy sharing an ID with an active item (a half-finished delete) is ignored, because archived items contribute nothing to the index. Automatic repair is deferred.
 - KTD5. **Link logic is a pure module, `crates/taskbook-common/src/links.rs`.** It owns three things: the span scanner, the save-time rewrite, and the link index. It takes plain item data, has no TUI or storage dependency, and carries the bulk of the tests. Follows the shape of `crates/taskbook-common/src/due.rs`.
 - KTD6. **Span classification.** The scanner finds closed `[[…]]` spans; the inner text classifies as Full (exactly 16 alphabet letters), Numeric (digits only), Prefix (1–15 alphabet letters), or Plain (anything else, including mixed or other letters). Matching is case-insensitive and rewritten tokens are lowercase. An unclosed `[[` is not a span.
-- KTD7. **"Added in this edit" is a multiset diff against the stored baseline.** The baseline is the item's stored text when the edit session started (empty for a create), re-read at save time and held fixed across reject-and-retry passes, so a rejected `[[99]]` cannot become "pre-existing" on the second try. For notes, title and body are diffed together so moving a span between them is not an addition. For each span text, the first k occurrences (k = baseline count) stay verbatim and later occurrences are added (R8, R10).
+- KTD7. **"Added in this edit" is a multiset diff against the stored baseline.** The baseline is the item's stored text captured once when the edit session starts (when `e` or `l` prefills the command line, when a typed `/edit` is first submitted, or when the editor opens; empty for a create) and reused unchanged for every retry, so a rejected `[[99]]` cannot become "pre-existing" on the second try. For notes, title and body are diffed together so moving a span between them is not an addition. For each span text, the first k occurrences (k = baseline count) stay verbatim and later occurrences are added (R8, R10).
 - KTD8. **Rewrite outcome is a value, not an error.** `rewrite_on_save(baseline, draft, index)` returns either the rewritten text or a list of rejected references with reasons (not found, ambiguous prefix, divergent target). Full tokens are never rejected (R10). Callers in the TUI show the message as a status and keep the draft.
 - KTD9. **TUI keeps an active-items snapshot and a `LinkIndex` independent of the view.** `App` loads active items in every view (Archive view currently replaces `app.items`), rebuilding the index in `refresh_items`, `set_view`, the SSE handler for both active and archive changes, and after restore. Prefix uniqueness is computed over active items; an archived row's prefix is computed over active items plus itself.
 - KTD10. **Command-line submit only clears on success.** Submit currently deactivates the command line before executing and action errors propagate out of `run_app`, closing the TUI. The link-rewrite path returns a rejection that sets an error status and leaves the input text and cursor in place (R9). Other storage errors keep today's behavior.
@@ -249,8 +249,8 @@ Save path for any TUI text save (command line or `$EDITOR`):
 
 ```mermaid
 flowchart TB
-  S["User submits draft"] --> B["Re-read stored text (baseline fixed for this edit session)"]
-  B --> D["Multiset diff: spans added vs baseline"]
+  B["Capture stored text once at edit-session start (baseline)"] --> S["User submits draft"]
+  S --> D["Multiset diff: spans added vs baseline"]
   D --> C{"Each added span"}
   C -- "Full token" --> K["Keep verbatim"]
   C -- "Plain" --> K
@@ -445,7 +445,7 @@ Stable-ID derivation (directional, not a specification): `id = encode_k_to_z(mix
 - Tests: `crates/taskbook-client/src/tui/app.rs` tests module; `crates/taskbook-client/src/editor.rs` tests; `crates/taskbook-client/src/taskbook.rs` tests
 
 **Approach:**
-1. Route `/task`, `/note`, and `/edit` descriptions through `rewrite_on_save` before calling `Taskbook`; baseline is empty for creates and the stored description for `/edit`, read when the command executes.
+1. Route `/task`, `/note`, and `/edit` descriptions through `rewrite_on_save` before calling `Taskbook`; baseline is empty for creates and, for `/edit`, the stored description captured at session start per KTD7 and kept on `App` across retries.
 2. Reorder submit so the command line clears only after success; on rejection set an error status and keep the input and cursor.
 3. Add `Taskbook::edit_note_silent(id, title, body)` as a single write and use it in `edit_note_external`.
 4. Capture the stored title and body once when the editor session starts; on rejection reopen the editor on the edited content with a leading `//` message line, looping until the save succeeds or the user cancels.
