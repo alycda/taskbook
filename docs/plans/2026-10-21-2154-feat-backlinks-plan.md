@@ -417,7 +417,7 @@ Stable-ID derivation (directional, not a specification): `id = encode_k_to_z(mix
 - Tests: new `#[cfg(test)] mod tests` in `crates/taskbook-client/src/tui/app.rs`
 
 **Approach:**
-1. Add an `App::with_taskbook(Taskbook, Config)` test constructor so tests avoid the real user config.
+1. Add an `App::with_taskbook(Taskbook, Config, config_path)` test constructor, and route every `self.config.save()` in `App` (`set_view`, `toggle_hide_completed`, `cycle_sort_method`) through a helper that writes to that path, so tests never touch `~/.config/taskbook/taskbook.json`.
 2. Add the active snapshot and `LinkIndex` to `App`; rebuild in `refresh_items`, `set_view`, after restore, and in the SSE handler for both data and archive changes.
 3. Make restore reload the archive list and the index explicitly; `r` on a row that no longer exists sets a status instead of returning an error.
 
@@ -545,7 +545,7 @@ Stable-ID derivation (directional, not a specification): `id = encode_k_to_z(mix
 **Test scenarios:**
 - Covers F3. With A linking B, selecting B and jumping from its backlinks selects A.
 - Jumping to a completed item while hide-completed is on reveals it without changing the saved config.
-- Jumping from Archive view switches to Board view and leaves `default_view` unchanged in the config file.
+- Jumping from Archive view switches to Board view and leaves `default_view` unchanged in the test's temp config file.
 - Jumping clears an active search term and board filter and sets a status naming that.
 - Broken and divergent entries are not jumpable.
 - Covers AE6. At 80 columns the pane is not rendered even when toggled on; at 120 columns it is.
