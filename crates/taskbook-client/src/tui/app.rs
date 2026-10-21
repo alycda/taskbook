@@ -949,6 +949,84 @@ pub(crate) mod tests {
         press(&mut app, KeyCode::Enter);
         assert_eq!(app.selected_id(), Some(a));
         assert!(app.pane.focused);
+        assert_eq!(
+            app.status_message.as_ref().unwrap().text,
+            "That link is broken"
+        );
+    }
+
+    #[test]
+    fn divergent_entries_say_why_they_cannot_be_jumped_to() {
+        let (mut app, _) = test_app();
+        wide(&mut app);
+        let twin_id = taskbook_common::stable_id::from_timestamp(1);
+        let linker = create_task(&mut app, &format!("L [[{twin_id}]]"));
+        let mut twin = taskbook_common::Task::new(90, "Twin".into(), vec!["my board".into()], 1);
+        twin.timestamp = 1;
+        let mut twin2 = twin.clone();
+        twin2.id = 91;
+        for t in [twin, twin2] {
+            app.active_items
+                .insert(t.id.to_string(), StorageItem::Task(t));
+        }
+        app.items = app.active_items.clone();
+        app.links = LinkIndex::build(app.active_items.values());
+        app.update_display_order();
+        select(&mut app, linker);
+
+        press(&mut app, KeyCode::Char('o'));
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.selected_id(), Some(linker));
+        assert_eq!(
+            app.status_message.as_ref().unwrap().text,
+            "Two items share that ID; cannot jump"
+        );
+    }
+
+    #[test]
+    fn pane_keys_move_the_cursor_jump_and_leave() {
+        let (mut app, _) = test_app();
+        wide(&mut app);
+        let t = create_task(&mut app, "Target");
+        let tid = stable_id_of(&app, t);
+        create_task(&mut app, &format!("A [[{tid}]]"));
+        create_task(&mut app, &format!("B [[{tid}]]"));
+        select(&mut app, t);
+        let expected = match app.pane_content().get(1).map(|e| e.target) {
+            Some(Target::Active { numeric }) => numeric,
+            other => panic!("unexpected second entry: {other:?}"),
+        };
+
+        press(&mut app, KeyCode::Char('o'));
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char('j'));
+        assert_eq!(app.pane.cursor, 1, "j stops at the last entry");
+        press(&mut app, KeyCode::Char('k'));
+        assert_eq!(app.pane.cursor, 0);
+        press(&mut app, KeyCode::Esc);
+        assert!(!app.pane.focused);
+
+        press(&mut app, KeyCode::Char('o'));
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.selected_id(), Some(expected));
+    }
+
+    #[test]
+    fn hiding_the_pane_returns_keys_to_the_list() {
+        let (mut app, _) = test_app();
+        wide(&mut app);
+        let first = create_task(&mut app, "first");
+        let fid = stable_id_of(&app, first);
+        create_task(&mut app, &format!("second [[{fid}]]"));
+        select(&mut app, first);
+        press(&mut app, KeyCode::Char('o'));
+        assert!(app.pane.focused);
+
+        app.status_width = 80;
+        press(&mut app, KeyCode::Char('j'));
+        assert!(!app.pane.focused);
+        assert_ne!(app.selected_id(), Some(first));
     }
 
     #[test]
