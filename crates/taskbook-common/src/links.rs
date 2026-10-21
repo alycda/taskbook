@@ -257,6 +257,20 @@ pub fn link_targets(text: &str) -> Vec<String> {
     targets
 }
 
+/// Stable IDs an item links to from its description and, for a note, its
+/// body: deduplicated, in order of first appearance.
+pub fn item_link_targets(item: &StorageItem) -> Vec<String> {
+    let mut targets = link_targets(item.description());
+    if let Some(body) = item.note_body() {
+        for id in link_targets(body) {
+            if !targets.contains(&id) {
+                targets.push(id);
+            }
+        }
+    }
+    targets
+}
+
 /// What a link's target resolves to among the active items.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Target {
@@ -312,14 +326,7 @@ impl LinkIndex {
             titles.insert(own_id.clone(), item.description().to_string());
             numeric_by_id.insert(own_id.clone(), item.id());
 
-            let mut targets = link_targets(item.description());
-            if let Some(body) = item.note_body() {
-                for id in link_targets(body) {
-                    if !targets.contains(&id) {
-                        targets.push(id);
-                    }
-                }
-            }
+            let targets = item_link_targets(item);
             for id in targets.iter().filter(|id| **id != own_id) {
                 inbound.entry(id.clone()).or_default().push(item.id());
             }
@@ -376,18 +383,8 @@ impl LinkIndex {
         }
         let ids = &self.resolver.ids;
         let at = ids.partition_point(|other| other.as_str() < id);
-        let common = |other: &String| {
-            other
-                .bytes()
-                .zip(id.bytes())
-                .take_while(|(a, b)| a == b)
-                .count()
-        };
-        let shared = at
-            .checked_sub(1)
-            .map_or(0, |i| common(&ids[i]))
-            .max(ids.get(at).map_or(0, common));
-        (shared + 1).min(id.len())
+        let prev = at.checked_sub(1).map(|i| ids[i].as_str());
+        stable_id::unique_prefix_len(prev, ids.get(at).map(String::as_str), id)
     }
 
     /// `id` cut to its shortest unique prefix.
@@ -406,7 +403,7 @@ impl LinkIndex {
             let id = text[span.inner.clone()].to_string();
             segments.push(match self.target(&id) {
                 Target::Active { .. } => Segment::Link {
-                    title: self.flat_title(&id),
+                    title: self.title_with_short_ids(&id),
                     id,
                 },
                 Target::Divergent => Segment::Divergent { id },
@@ -423,11 +420,13 @@ impl LinkIndex {
     /// The current title of the active item with this stable ID, with its own
     /// tokens shown as short IDs.
     pub fn title(&self, id: &str) -> Option<String> {
-        self.titles.contains_key(id).then(|| self.flat_title(id))
+        self.titles
+            .contains_key(id)
+            .then(|| self.title_with_short_ids(id))
     }
 
     /// A target's title with its own tokens shown as short IDs.
-    fn flat_title(&self, id: &str) -> String {
+    fn title_with_short_ids(&self, id: &str) -> String {
         let title = self.titles.get(id).map_or("", String::as_str);
         let mut flat = String::with_capacity(title.len());
         let mut copied_to = 0;

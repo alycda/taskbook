@@ -40,6 +40,19 @@ fn mix(mut z: u64) -> u64 {
     z ^ (z >> 31)
 }
 
+/// Shortest prefix of `id` shared with neither sorted neighbour.
+pub(crate) fn unique_prefix_len(prev: Option<&str>, next: Option<&str>, id: &str) -> usize {
+    let common = |other: &str| {
+        other
+            .bytes()
+            .zip(id.bytes())
+            .take_while(|(a, b)| a == b)
+            .count()
+    };
+    let shared = prev.map_or(0, common).max(next.map_or(0, common));
+    (shared + 1).min(id.len())
+}
+
 fn is_alphabet_run(s: &str) -> bool {
     s.bytes().all(|b| ALPHABET.contains(&b))
 }
@@ -64,8 +77,6 @@ where
     let mut sorted: Vec<&str> = ids.into_iter().collect();
     sorted.sort_unstable();
 
-    let common = |a: &str, b: &str| a.bytes().zip(b.bytes()).take_while(|(x, y)| x == y).count();
-
     let mut lengths = HashMap::with_capacity(sorted.len());
     for (i, id) in sorted.iter().enumerate() {
         let prev = i.checked_sub(1).map(|j| sorted[j]);
@@ -73,10 +84,7 @@ where
         let len = if prev == Some(*id) || next == Some(*id) {
             LEN
         } else {
-            let shared = prev
-                .map_or(0, |p| common(p, id))
-                .max(next.map_or(0, |n| common(n, id)));
-            (shared + 1).min(id.len())
+            unique_prefix_len(prev, next, id)
         };
         lengths.insert((*id).to_string(), len);
     }

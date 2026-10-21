@@ -140,9 +140,16 @@ pub struct CommandLineState {
     pub pending_confirm: Option<PendingAction>,
     /// Stored text of the item being edited when this edit session began,
     /// so retries after a rejected save diff against the same baseline
-    pub link_baseline: Option<(u64, String)>,
+    pub link_baseline: Option<EditBaseline>,
     /// Char index of the `[[` whose link dropdown the user closed with Esc
     pub link_dismissed_at: Option<usize>,
+}
+
+/// The stored text of an item when an edit session began
+#[derive(Debug, Clone)]
+pub struct EditBaseline {
+    pub id: u64,
+    pub text: String,
 }
 
 /// An autocomplete suggestion
@@ -184,7 +191,7 @@ pub struct FilterState {
     /// Hide completed tasks
     pub hide_completed: bool,
     /// A completed task shown despite `hide_completed`, after a jump to it
-    pub reveal: Option<u64>,
+    pub revealed_completed: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -273,7 +280,7 @@ impl App {
     pub fn refresh_items(&mut self) -> Result<()> {
         self.active_items = self.taskbook.get_all_items()?;
         self.links = LinkIndex::build(self.active_items.values());
-        self.boards = self.taskbook.get_all_boards()?;
+        self.boards = self.taskbook.boards_of(&self.active_items);
         self.items = if self.view == ViewMode::Archive {
             self.taskbook.get_all_archive_items()?
         } else {
@@ -325,7 +332,7 @@ impl App {
 
     /// Check if an item should be shown based on current filters
     pub fn should_show_item(&self, item: &StorageItem) -> bool {
-        if self.filter.hide_completed && self.filter.reveal != Some(item.id()) {
+        if self.filter.hide_completed && self.filter.revealed_completed != Some(item.id()) {
             if let Some(task) = item.as_task() {
                 if task.is_complete {
                     return false;
@@ -403,31 +410,7 @@ impl App {
                 let mut items: Vec<_> = self
                     .items
                     .values()
-                    .filter(|item| {
-                        if self.filter.hide_completed && self.filter.reveal != Some(item.id()) {
-                            if let Some(task) = item.as_task() {
-                                if task.is_complete {
-                                    return false;
-                                }
-                            }
-                        }
-                        if let Some(ref term) = self.filter.search_term {
-                            let term_lower = term.to_lowercase();
-                            let in_desc = item.description().to_lowercase().contains(&term_lower);
-                            let in_body = item
-                                .note_body()
-                                .map(|b| b.to_lowercase().contains(&term_lower))
-                                .unwrap_or(false);
-                            let in_tags = item
-                                .tags()
-                                .iter()
-                                .any(|t| t.to_lowercase().contains(&term_lower));
-                            if !in_desc && !in_body && !in_tags {
-                                return false;
-                            }
-                        }
-                        true
-                    })
+                    .filter(|item| self.should_show_item(item))
                     .collect();
                 items.sort_by(|a, b| {
                     b.timestamp()
@@ -452,7 +435,7 @@ impl App {
     /// Toggle hide completed tasks
     pub fn toggle_hide_completed(&mut self) {
         self.filter.hide_completed = !self.filter.hide_completed;
-        self.filter.reveal = None;
+        self.filter.revealed_completed = None;
         self.config.display_complete_tasks = !self.filter.hide_completed;
         self.save_config();
         self.update_display_order();
@@ -641,15 +624,7 @@ impl App {
             return PaneContent::default();
         };
 
-        let mut targets = links::link_targets(item.description());
-        if let Some(body) = item.note_body() {
-            for id in links::link_targets(body) {
-                if !targets.contains(&id) {
-                    targets.push(id);
-                }
-            }
-        }
-        let outgoing = targets
+        let outgoing = links::item_link_targets(item)
             .into_iter()
             .map(|id| {
                 let target = self.links.target(&id);
@@ -671,10 +646,13 @@ impl App {
                 .backlinks(&own_id)
                 .iter()
                 .filter_map(|n| self.active_items.get(&n.to_string()))
-                .map(|source| PaneEntry {
-                    id: source.stable_id(),
-                    title: plain_text(self, source.description()),
-                    target: self.links.target(&source.stable_id()),
+                .map(|source| {
+                    let id = source.stable_id();
+                    PaneEntry {
+                        target: self.links.target(&id),
+                        title: plain_text(self, source.description()),
+                        id,
+                    }
                 })
                 .collect()
         };
@@ -687,7 +665,7 @@ impl App {
                 .unwrap_or(usize::MAX),
             _ => usize::MAX,
         };
-        backlinks.sort_by_key(position);
+        backlinks.sort_by_cached_key(position);
 
         PaneContent {
             outgoing,
@@ -720,9 +698,9 @@ impl App {
             .get(&numeric.to_string())
             .and_then(|item| item.as_task())
             .is_some_and(|task| task.is_complete);
-        self.filter.reveal = None;
+        self.filter.revealed_completed = None;
         if completed && self.filter.hide_completed {
-            self.filter.reveal = Some(numeric);
+            self.filter.revealed_completed = Some(numeric);
             changed.push("showing a completed task");
         }
         self.update_display_order();
@@ -759,16 +737,6 @@ pub struct PaneEntry {
     /// Rendered title (empty for broken and divergent targets)
     pub title: String,
     pub target: Target,
-}
-
-impl PaneEntry {
-    /// The active item a jump would select, if this entry can be jumped to.
-    pub fn jump_target(&self) -> Option<u64> {
-        match self.target {
-            Target::Active { numeric } => Some(numeric),
-            Target::Divergent | Target::Missing => None,
-        }
-    }
 }
 
 /// What the link pane shows for the selected item

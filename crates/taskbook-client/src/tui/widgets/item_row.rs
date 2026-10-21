@@ -174,20 +174,29 @@ pub fn text_spans(app: &App, text: &str, base: Style) -> Vec<Span<'static>> {
         .map(|segment| match segment {
             Segment::Text(t) => Span::styled(t, base),
             Segment::Link { title, .. } => Span::styled(title, app.theme.link),
-            Segment::Broken { id } => Span::styled(
-                format!("✗{}", app.links.short_id(&id)),
-                app.theme.link_broken,
-            ),
-            Segment::Divergent { id } => Span::styled(
-                format!("{}??", app.links.short_id(&id)),
-                app.theme.link_divergent,
-            ),
+            Segment::Broken { id } => Span::styled(broken_marker(app, &id), app.theme.link_broken),
+            Segment::Divergent { id } => {
+                Span::styled(divergent_marker(app, &id), app.theme.link_divergent)
+            }
         })
         .collect()
 }
 
+/// How a link to an archived or missing item reads: `✗` and its short ID.
+pub fn broken_marker(app: &App, id: &str) -> String {
+    format!("✗{}", app.links.short_id(id))
+}
+
+/// How a stable ID shared by more than one item reads: short ID and `??`.
+pub fn divergent_marker(app: &App, id: &str) -> String {
+    format!("{}??", app.links.short_id(id))
+}
+
 /// `text` as it renders, without styling (for matching and truncation).
 pub fn plain_text(app: &App, text: &str) -> String {
+    if !text.contains("[[") {
+        return text.to_string();
+    }
     text_spans(app, text, Style::default())
         .iter()
         .map(|span| span.content.as_ref())

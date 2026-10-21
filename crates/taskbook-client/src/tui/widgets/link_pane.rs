@@ -6,8 +6,13 @@ use ratatui::{
     Frame,
 };
 
+use super::item_row::{broken_marker, divergent_marker};
+use super::truncate_chars;
 use crate::tui::app::{App, PaneEntry};
 use taskbook_common::links::Target;
+
+/// Indent before each entry.
+const INDENT: &str = "  ";
 
 /// Render the link side pane for the selected item.
 pub fn render_link_pane(frame: &mut Frame, app: &App, area: Rect) {
@@ -82,28 +87,23 @@ fn entry_line(app: &App, entry: &PaneEntry, width: usize, selected: bool) -> Lin
         Target::Missing => (
             String::new(),
             Style::default(),
-            format!("✗{}", short),
+            broken_marker(app, &entry.id),
             app.theme.link_broken,
         ),
         Target::Divergent => (
             String::new(),
             Style::default(),
-            format!("{}??", short),
+            divergent_marker(app, &entry.id),
             app.theme.link_divergent,
         ),
     };
 
-    // "  " indent + label + " " + id
-    let room = width.saturating_sub(2 + 1 + id_text.chars().count());
-    let label = if label.chars().count() > room {
-        let kept: String = label.chars().take(room.saturating_sub(1)).collect();
-        format!("{}…", kept)
-    } else {
-        label
-    };
+    // Indent, label, a space, then the ID.
+    let room = width.saturating_sub(INDENT.len() + 1 + id_text.chars().count());
+    let label = truncate_chars(&label, room);
 
     let mut line = Line::from(vec![
-        Span::raw("  "),
+        Span::raw(INDENT),
         Span::styled(label, label_style),
         Span::raw(" "),
         Span::styled(id_text, id_style),

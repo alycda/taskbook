@@ -386,6 +386,11 @@ impl Taskbook {
         self.get_archive()
     }
 
+    /// Get the boards of already-loaded items (for TUI)
+    pub fn boards_of(&self, data: &HashMap<String, StorageItem>) -> Vec<String> {
+        self.get_boards(data)
+    }
+
     /// Get all boards (for TUI)
     pub fn get_all_boards(&self) -> Result<Vec<String>> {
         let data = self.get_data()?;
@@ -1447,6 +1452,7 @@ fn unique_timestamp(
         .values()
         .chain(archive.values())
         .map(|item| item.timestamp())
+        .filter(|&ts| ts >= candidate)
         .collect();
     let mut ts = candidate;
     while taken.contains(&ts) {

@@ -46,3 +46,13 @@ pub(crate) fn render_scrollable_list(
         frame.render_stateful_widget(scrollbar, area, &mut scrollbar_state);
     }
 }
+
+/// `s` cut to at most `max` characters, ending in `…` when cut.
+pub(crate) fn truncate_chars(s: &str, max: usize) -> String {
+    if s.chars().count() > max {
+        let kept: String = s.chars().take(max.saturating_sub(1)).collect();
+        format!("{}…", kept)
+    } else {
+        s.to_string()
+    }
+}

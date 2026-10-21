@@ -1,5 +1,6 @@
 use super::app::{App, Suggestion, SuggestionKind};
 use super::widgets::item_row::plain_text;
+use super::widgets::truncate_chars;
 use taskbook_common::board;
 
 /// Static list of all slash commands with descriptions
@@ -47,10 +48,10 @@ pub fn update_suggestions(app: &mut App) {
     // An unclosed `[[` in a description suggests link targets, unless the
     // user dismissed the dropdown for this `[[` with Esc.
     match open_link_query(app) {
-        Some((open, query)) => {
-            if app.command_line.link_dismissed_at != Some(open) {
+        Some(link) => {
+            if app.command_line.link_dismissed_at != Some(link.start) {
                 app.command_line.link_dismissed_at = None;
-                suggest_links(app, open, &query);
+                suggest_links(app, &link);
             }
             return;
         }
@@ -95,9 +96,17 @@ pub fn update_suggestions(app: &mut App) {
     }
 }
 
-/// An unclosed `[[` before the cursor in the description of `/task`, `/note`
-/// or `/edit`: its char index in the input and the query typed after it.
-pub fn open_link_query(app: &App) -> Option<(usize, String)> {
+/// An unclosed `[[` before the cursor in the description of a command
+pub struct OpenLink {
+    /// Char index of the `[[` in the input
+    pub start: usize,
+    /// Text typed after the `[[`
+    pub query: String,
+}
+
+/// The unclosed `[[` before the cursor in the description of `/task`,
+/// `/note` or `/edit`, if any.
+pub fn open_link_query(app: &App) -> Option<OpenLink> {
     let input = &app.command_line.input;
     if !input.starts_with('/') {
         return None;
@@ -119,13 +128,25 @@ pub fn open_link_query(app: &App) -> Option<(usize, String)> {
     if query.contains("]]") {
         return None;
     }
-    Some((before[..open_byte].chars().count(), query.to_string()))
+    Some(OpenLink {
+        start: before[..open_byte].chars().count(),
+        query: query.to_string(),
+    })
+}
+
+/// A link target offered by `[[` autocomplete
+struct LinkCandidate {
+    on_current_board: bool,
+    timestamp: i64,
+    id: String,
+    title: String,
+    board: Option<String>,
 }
 
 /// Suggest active, non-divergent items to link to, newest first with the
 /// current board's items ahead; accepting one inserts `[[<full id>]]`.
-fn suggest_links(app: &mut App, open: usize, query: &str) {
-    let query = query.to_lowercase();
+fn suggest_links(app: &mut App, link: &OpenLink) {
+    let query = link.query.to_lowercase();
     let input_chars: Vec<char> = app.command_line.input.chars().collect();
     let cursor = app.command_line.cursor.min(input_chars.len());
 
@@ -147,7 +168,7 @@ fn suggest_links(app: &mut App, open: usize, query: &str) {
             .is_some_and(|cb| boards.iter().any(|b| board::board_eq(b, cb)))
     };
 
-    let mut candidates: Vec<(bool, i64, String, String, String)> = app
+    let mut candidates: Vec<LinkCandidate> = app
         .active_items
         .values()
         .filter(|item| Some(item.id()) != editing)
@@ -161,31 +182,38 @@ fn suggest_links(app: &mut App, open: usize, query: &str) {
                 || title.to_lowercase().contains(&query)
                 || item.id().to_string().starts_with(&query)
                 || id.starts_with(&query);
-            matches.then(|| {
-                let board = item
-                    .boards()
-                    .first()
-                    .map(|b| board::display_name(b))
-                    .unwrap_or_default();
-                (on_board(item.boards()), item.timestamp(), id, title, board)
+            matches.then(|| LinkCandidate {
+                on_current_board: on_board(item.boards()),
+                timestamp: item.timestamp(),
+                id,
+                title,
+                board: item.boards().first().cloned(),
             })
         })
         .collect();
-    candidates.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.cmp(&a.1)));
+    candidates.sort_by(|a, b| {
+        b.on_current_board
+            .cmp(&a.on_current_board)
+            .then(b.timestamp.cmp(&a.timestamp))
+    });
 
-    let before_open: String = input_chars[..open].iter().collect();
+    let before_open: String = input_chars[..link.start].iter().collect();
     let after_cursor: String = input_chars[cursor..].iter().collect();
-    for (_, _, id, title, board_name) in candidates.into_iter().take(MAX_SUGGESTIONS) {
-        let title = if title.chars().count() > 28 {
-            format!("{}…", title.chars().take(27).collect::<String>())
-        } else {
-            title
-        };
-        let display = format!("{} {}", title, app.links.short_id(&id));
+    for candidate in candidates.into_iter().take(MAX_SUGGESTIONS) {
+        let display = format!(
+            "{} {}",
+            truncate_chars(&candidate.title, 28),
+            app.links.short_id(&candidate.id)
+        );
         app.command_line.suggestions.push(Suggestion {
             display,
-            completion: format!("{}[[{}]]{}", before_open, id, after_cursor),
-            description: Some(board_name),
+            completion: format!("{}[[{}]]{}", before_open, candidate.id, after_cursor),
+            description: Some(
+                candidate
+                    .board
+                    .map(|b| board::display_name(&b))
+                    .unwrap_or_default(),
+            ),
             kind: SuggestionKind::Link,
         });
     }
@@ -313,11 +341,7 @@ fn suggest_items(app: &mut App, partial: &str) {
         };
 
         // Truncate description for display
-        let display: String = if desc.chars().count() > 35 {
-            format!("{}…", desc.chars().take(34).collect::<String>())
-        } else {
-            desc.to_string()
-        };
+        let display = truncate_chars(&desc, 35);
 
         // Build completion: replace the partial token with @<id>
         let before_token: String = input_chars[..last_space + 1].iter().collect();

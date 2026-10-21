@@ -6,7 +6,8 @@ use taskbook_common::board;
 use taskbook_common::links::{self, Rejection, Rewrite, Target};
 
 use super::app::{
-    App, PendingAction, PopupState, StatusKind, SuggestionKind, ViewMode, PANE_MIN_WIDTH,
+    App, EditBaseline, PendingAction, PopupState, StatusKind, SuggestionKind, ViewMode,
+    PANE_MIN_WIDTH,
 };
 use super::autocomplete;
 use super::command_parser::{self, ParsedCommand};
@@ -69,15 +70,15 @@ fn handle_pane_key(app: &mut App, key: KeyEvent) -> Result<()> {
         KeyCode::Char('k') | KeyCode::Up => {
             app.pane.cursor = cursor.saturating_sub(1);
         }
-        KeyCode::Enter => match content.get(cursor).map(|e| (e.jump_target(), e.target)) {
-            Some((Some(numeric), _)) => app.jump_to(numeric)?,
-            Some((None, Target::Divergent)) => {
+        KeyCode::Enter => match content.get(cursor).map(|e| e.target) {
+            Some(Target::Active { numeric }) => app.jump_to(numeric)?,
+            Some(Target::Divergent) => {
                 app.set_status(
                     "Two items share that ID; cannot jump".to_string(),
                     StatusKind::Info,
                 );
             }
-            Some((None, _)) => {
+            Some(Target::Missing) => {
                 app.set_status("That link is broken".to_string(), StatusKind::Info);
             }
             None => {}
@@ -185,7 +186,11 @@ fn handle_command_line_key(app: &mut App, key: KeyEvent) -> Result<()> {
 
     // Inside an unclosed `[[`, Enter picks a link target instead of
     // submitting, and Esc first closes only the dropdown.
-    if let Some((open, _)) = autocomplete::open_link_query(app) {
+    let link_query = match key.code {
+        KeyCode::Enter | KeyCode::Esc => autocomplete::open_link_query(app),
+        _ => None,
+    };
+    if let Some(link) = link_query {
         let has_links = app
             .command_line
             .suggestions
@@ -206,7 +211,7 @@ fn handle_command_line_key(app: &mut App, key: KeyEvent) -> Result<()> {
             KeyCode::Esc if has_links => {
                 app.command_line.suggestions.clear();
                 app.command_line.selected_suggestion = None;
-                app.command_line.link_dismissed_at = Some(open);
+                app.command_line.link_dismissed_at = Some(link.start);
                 return Ok(());
             }
             _ => {}
@@ -269,14 +274,22 @@ fn accept_suggestion(app: &mut App) {
 struct Rejected {
     rejections: Vec<Rejection>,
     /// The baseline the draft was diffed against, kept for the retry.
-    baseline: Option<(u64, String)>,
+    baseline: Option<EditBaseline>,
+}
+
+/// Rewrite the description of a new item, whose baseline is empty.
+fn rewrite_new(app: &App, description: &str) -> std::result::Result<Rewrite, Rejected> {
+    links::rewrite_on_save("", description, app.links.resolver()).map_err(|rejections| Rejected {
+        rejections,
+        baseline: None,
+    })
 }
 
 /// Parse and execute the command line input
 fn execute_input(
     app: &mut App,
     input: &str,
-    baseline: Option<(u64, String)>,
+    baseline: Option<EditBaseline>,
 ) -> Result<Option<Rejected>> {
     match command_parser::parse_command(input) {
         Ok(cmd) => execute_command(app, cmd, baseline),
@@ -291,7 +304,7 @@ fn execute_input(
 fn execute_command(
     app: &mut App,
     cmd: ParsedCommand,
-    baseline: Option<(u64, String)>,
+    baseline: Option<EditBaseline>,
 ) -> Result<Option<Rejected>> {
     match cmd {
         ParsedCommand::Task {
@@ -301,14 +314,9 @@ fn execute_command(
             tags,
             due_date,
         } => {
-            let rewrite = match links::rewrite_on_save("", &description, app.links.resolver()) {
+            let rewrite = match rewrite_new(app, &description) {
                 Ok(rewrite) => rewrite,
-                Err(rejections) => {
-                    return Ok(Some(Rejected {
-                        rejections,
-                        baseline: None,
-                    }))
-                }
+                Err(rejected) => return Ok(Some(rejected)),
             };
             let board_name = board
                 .map(|b| board::normalize_board_name(&b))
@@ -335,14 +343,9 @@ fn execute_command(
             description,
             tags,
         } => {
-            let rewrite = match links::rewrite_on_save("", &description, app.links.resolver()) {
+            let rewrite = match rewrite_new(app, &description) {
                 Ok(rewrite) => rewrite,
-                Err(rejections) => {
-                    return Ok(Some(Rejected {
-                        rejections,
-                        baseline: None,
-                    }))
-                }
+                Err(rejected) => return Ok(Some(rejected)),
             };
             let board_name = board
                 .map(|b| board::normalize_board_name(&b))
@@ -373,11 +376,11 @@ fn execute_command(
             }
         }
         ParsedCommand::Edit { id, description } => {
-            // The baseline is captured once per edit session (KTD7): from the
-            // `e`/`l` prefill, or from storage on the first submit.
+            // The baseline is captured once per edit session: from the `e`/`l`
+            // prefill, or from storage on the first submit.
             let base = baseline
-                .filter(|(base_id, _)| *base_id == id)
-                .map(|(_, text)| text)
+                .filter(|b| b.id == id)
+                .map(|b| b.text)
                 .or_else(|| {
                     app.active_items
                         .get(&id.to_string())
@@ -389,7 +392,7 @@ fn execute_command(
                 Err(rejections) => {
                     return Ok(Some(Rejected {
                         rejections,
-                        baseline: Some((id, base)),
+                        baseline: Some(EditBaseline { id, text: base }),
                     }))
                 }
             }
@@ -592,7 +595,7 @@ fn handle_shortcut_key(app: &mut App, key: KeyEvent) -> Result<()> {
                 let id = item.id();
                 let desc = item.description().to_string();
                 app.activate_command_line(&format!("/edit @{} {}", id, desc));
-                app.command_line.link_baseline = Some((id, desc));
+                app.command_line.link_baseline = Some(EditBaseline { id, text: desc });
             }
         }
         // Link pane: toggle and focus
@@ -625,7 +628,7 @@ fn handle_shortcut_key(app: &mut App, key: KeyEvent) -> Result<()> {
                 let id = item.id();
                 let desc = item.description().to_string();
                 app.activate_command_line(&format!("/edit @{} {} [[", id, desc));
-                app.command_line.link_baseline = Some((id, desc));
+                app.command_line.link_baseline = Some(EditBaseline { id, text: desc });
                 autocomplete::update_suggestions(app);
             }
         }
