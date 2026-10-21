@@ -148,6 +148,12 @@ impl StorageItem {
         matches!(self, StorageItem::Task(_))
     }
 
+    /// The item's stable ID, derived from its creation timestamp.
+    /// See [`crate::stable_id`].
+    pub fn stable_id(&self) -> String {
+        crate::stable_id::from_timestamp(self.timestamp())
+    }
+
     pub fn set_description(&mut self, desc: String) {
         match self {
             StorageItem::Task(t) => t.description = desc,
@@ -236,5 +242,64 @@ impl StorageItem {
             StorageItem::Note(n) => n.has_body(),
             StorageItem::Task(_) => false,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::stable_id;
+
+    fn task_at(ts: i64) -> StorageItem {
+        let mut t = Task::new(3, "Write report".to_string(), vec!["Work".to_string()], 1);
+        t.timestamp = ts;
+        StorageItem::Task(t)
+    }
+
+    fn note_at(ts: i64) -> StorageItem {
+        let mut n = Note::new(4, "Meeting notes".to_string(), vec!["Work".to_string()]);
+        n.timestamp = ts;
+        StorageItem::Note(n)
+    }
+
+    #[test]
+    fn stable_id_is_derived_from_timestamp_only() {
+        let ts = 1_790_000_000_000;
+        assert_eq!(task_at(ts).stable_id(), stable_id::from_timestamp(ts));
+        assert_eq!(task_at(ts).stable_id(), note_at(ts).stable_id());
+
+        let via_trait: &dyn Item = &task_at(ts);
+        assert_eq!(via_trait.stable_id(), stable_id::from_timestamp(ts));
+    }
+
+    #[test]
+    fn stable_id_survives_every_mutation_but_timestamp() {
+        let mut item = task_at(1_790_000_000_000);
+        let before = item.stable_id();
+
+        item.set_description("Rewritten".to_string());
+        item.set_starred(true);
+        item.set_boards(vec!["Home".to_string()]);
+        item.set_tags(vec!["urgent".to_string()]);
+        if let Some(t) = item.as_task_mut() {
+            t.is_complete = true;
+            t.in_progress = true;
+            t.id = 99;
+        }
+
+        assert_eq!(item.stable_id(), before);
+    }
+
+    #[test]
+    fn stable_id_round_trips_without_a_stored_field() {
+        let item = note_at(1_790_000_000_123);
+        let json = serde_json::to_string(&item).unwrap();
+        assert!(
+            !json.contains(&item.stable_id()),
+            "stable id must not be serialized: {json}"
+        );
+
+        let back: StorageItem = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.stable_id(), item.stable_id());
     }
 }

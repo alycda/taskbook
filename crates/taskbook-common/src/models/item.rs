@@ -8,4 +8,10 @@ pub trait Item {
     fn boards(&self) -> &[String];
     fn tags(&self) -> &[String];
     fn is_task(&self) -> bool;
+
+    /// The item's stable ID, derived from its creation timestamp.
+    /// See [`crate::stable_id`].
+    fn stable_id(&self) -> String {
+        crate::stable_id::from_timestamp(self.timestamp())
+    }
 }
