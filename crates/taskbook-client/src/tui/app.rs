@@ -9,7 +9,7 @@ use crate::error::Result;
 use crate::render::Stats;
 use crate::taskbook::Taskbook;
 use taskbook_common::board;
-use taskbook_common::links::LinkIndex;
+use taskbook_common::links::{self, LinkIndex, Target};
 use taskbook_common::StorageItem;
 
 /// Sort items by the given method
@@ -49,6 +49,10 @@ pub fn sort_items_by(items: &mut [&StorageItem], method: SortMethod) {
 }
 
 use super::theme::TuiTheme;
+use super::widgets::item_row::plain_text;
+
+/// The link pane is only shown on terminals at least this wide.
+pub const PANE_MIN_WIDTH: u16 = 100;
 
 /// Main application state
 pub struct App {
@@ -100,6 +104,8 @@ pub struct App {
     pub history_saved_input: String,
     /// Where config changes are written (`None` = the user's config file)
     config_path: Option<PathBuf>,
+    /// Link side pane state
+    pub pane: PaneState,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -177,6 +183,8 @@ pub struct FilterState {
     pub board_filter: Option<String>,
     /// Hide completed tasks
     pub hide_completed: bool,
+    /// A completed task shown despite `hide_completed`, after a jump to it
+    pub reveal: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -242,6 +250,11 @@ impl App {
             history_index: None,
             history_saved_input: String::new(),
             config_path,
+            pane: PaneState {
+                visible: true,
+                focused: false,
+                cursor: 0,
+            },
             cached_stats: Stats {
                 percent: 0,
                 complete: 0,
@@ -312,7 +325,7 @@ impl App {
 
     /// Check if an item should be shown based on current filters
     pub fn should_show_item(&self, item: &StorageItem) -> bool {
-        if self.filter.hide_completed {
+        if self.filter.hide_completed && self.filter.reveal != Some(item.id()) {
             if let Some(task) = item.as_task() {
                 if task.is_complete {
                     return false;
@@ -391,7 +404,7 @@ impl App {
                     .items
                     .values()
                     .filter(|item| {
-                        if self.filter.hide_completed {
+                        if self.filter.hide_completed && self.filter.reveal != Some(item.id()) {
                             if let Some(task) = item.as_task() {
                                 if task.is_complete {
                                     return false;
@@ -439,6 +452,7 @@ impl App {
     /// Toggle hide completed tasks
     pub fn toggle_hide_completed(&mut self) {
         self.filter.hide_completed = !self.filter.hide_completed;
+        self.filter.reveal = None;
         self.config.display_complete_tasks = !self.filter.hide_completed;
         self.save_config();
         self.update_display_order();
@@ -553,13 +567,19 @@ impl App {
     /// Switch view mode
     pub fn set_view(&mut self, view: ViewMode) -> Result<()> {
         if self.view != view {
-            self.view = view;
-            self.selected_index = 0;
-
             // Persist the view choice
             self.config.default_view = view;
             self.save_config();
+            self.switch_view(view)?;
+        }
+        Ok(())
+    }
 
+    /// Switch view without saving it as the default view.
+    fn switch_view(&mut self, view: ViewMode) -> Result<()> {
+        if self.view != view {
+            self.view = view;
+            self.selected_index = 0;
             self.refresh_items()?;
         }
         Ok(())
@@ -608,6 +628,172 @@ impl App {
     /// Quit the application
     pub fn quit(&mut self) {
         self.running = false;
+    }
+
+    /// Whether the link pane is toggled on and the terminal is wide enough.
+    pub fn pane_shown(&self) -> bool {
+        self.pane.visible && self.status_width >= PANE_MIN_WIDTH
+    }
+
+    /// Outgoing links and backlinks of the selected item.
+    pub fn pane_content(&self) -> PaneContent {
+        let Some(item) = self.selected_item() else {
+            return PaneContent::default();
+        };
+
+        let mut targets = links::link_targets(item.description());
+        if let Some(body) = item.note_body() {
+            for id in links::link_targets(body) {
+                if !targets.contains(&id) {
+                    targets.push(id);
+                }
+            }
+        }
+        let outgoing = targets
+            .into_iter()
+            .map(|id| {
+                let target = self.links.target(&id);
+                let title = match target {
+                    Target::Active { .. } => self.links.title(&id).unwrap_or_default(),
+                    Target::Divergent | Target::Missing => String::new(),
+                };
+                PaneEntry { id, title, target }
+            })
+            .collect();
+
+        // Backlinks cannot be attributed to one of two items sharing an ID.
+        let own_id = item.stable_id();
+        let divergent = self.links.resolver().is_divergent(&own_id);
+        let mut backlinks: Vec<PaneEntry> = if divergent {
+            Vec::new()
+        } else {
+            self.links
+                .backlinks(&own_id)
+                .iter()
+                .filter_map(|n| self.active_items.get(&n.to_string()))
+                .map(|source| PaneEntry {
+                    id: source.stable_id(),
+                    title: plain_text(self, source.description()),
+                    target: self.links.target(&source.stable_id()),
+                })
+                .collect()
+        };
+        // Backlinks follow the main list's order; others keep ID order.
+        let position = |entry: &PaneEntry| match entry.target {
+            Target::Active { numeric } => self
+                .display_order
+                .iter()
+                .position(|&id| id == numeric)
+                .unwrap_or(usize::MAX),
+            _ => usize::MAX,
+        };
+        backlinks.sort_by_key(position);
+
+        PaneContent {
+            outgoing,
+            backlinks,
+            divergent,
+        }
+    }
+
+    /// The pane cursor, clamped to the current entries.
+    pub fn pane_cursor(&self, content: &PaneContent) -> usize {
+        self.pane.cursor.min(content.len().saturating_sub(1))
+    }
+
+    /// Select the active item `numeric`, switching view and clearing filters
+    /// as needed without touching saved settings, and say what changed.
+    pub fn jump_to(&mut self, numeric: u64) -> Result<()> {
+        let mut changed = Vec::new();
+        if self.view == ViewMode::Archive {
+            self.switch_view(ViewMode::Board)?;
+            changed.push("switched to board view");
+        }
+        if self.filter.search_term.take().is_some() {
+            changed.push("cleared search");
+        }
+        if self.filter.board_filter.take().is_some() {
+            changed.push("cleared board filter");
+        }
+        let completed = self
+            .active_items
+            .get(&numeric.to_string())
+            .and_then(|item| item.as_task())
+            .is_some_and(|task| task.is_complete);
+        self.filter.reveal = None;
+        if completed && self.filter.hide_completed {
+            self.filter.reveal = Some(numeric);
+            changed.push("showing a completed task");
+        }
+        self.update_display_order();
+        if let Some(position) = self.display_order.iter().position(|&id| id == numeric) {
+            self.selected_index = position;
+        }
+        self.pane.focused = false;
+        self.pane.cursor = 0;
+
+        let mut message = format!("Jumped to {}", numeric);
+        if !changed.is_empty() {
+            message.push_str(&format!(" ({})", changed.join(", ")));
+        }
+        self.set_status(message, StatusKind::Info);
+        Ok(())
+    }
+}
+
+/// Link side pane state
+#[derive(Debug, Clone)]
+pub struct PaneState {
+    /// Toggled on (it is still hidden below `PANE_MIN_WIDTH`)
+    pub visible: bool,
+    /// Keys go to the pane instead of the list
+    pub focused: bool,
+    /// Index into outgoing links followed by backlinks
+    pub cursor: usize,
+}
+
+/// One entry in the link pane
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PaneEntry {
+    pub id: String,
+    /// Rendered title (empty for broken and divergent targets)
+    pub title: String,
+    pub target: Target,
+}
+
+impl PaneEntry {
+    /// The active item a jump would select, if this entry can be jumped to.
+    pub fn jump_target(&self) -> Option<u64> {
+        match self.target {
+            Target::Active { numeric } => Some(numeric),
+            Target::Divergent | Target::Missing => None,
+        }
+    }
+}
+
+/// What the link pane shows for the selected item
+#[derive(Debug, Clone, Default)]
+pub struct PaneContent {
+    pub outgoing: Vec<PaneEntry>,
+    pub backlinks: Vec<PaneEntry>,
+    /// The selected item's own ID is divergent, so backlinks are not listed
+    pub divergent: bool,
+}
+
+impl PaneContent {
+    pub fn len(&self) -> usize {
+        self.outgoing.len() + self.backlinks.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// The entry at a cursor position over outgoing links then backlinks.
+    pub fn get(&self, index: usize) -> Option<&PaneEntry> {
+        self.outgoing
+            .get(index)
+            .or_else(|| self.backlinks.get(index.checked_sub(self.outgoing.len())?))
     }
 }
 
@@ -698,5 +884,170 @@ pub(crate) mod tests {
         app.set_view(ViewMode::Archive).unwrap();
         let saved = std::fs::read_to_string(&config_path).unwrap();
         assert!(saved.contains("archive"), "{saved}");
+    }
+    // ----- link pane and jump -----
+
+    fn select(app: &mut App, id: u64) {
+        app.selected_index = app.display_order.iter().position(|&i| i == id).unwrap();
+    }
+
+    fn press(app: &mut App, code: KeyCode) {
+        super::super::actions::handle_key_event(app, KeyEvent::new(code, KeyModifiers::NONE))
+            .unwrap();
+    }
+
+    fn wide(app: &mut App) {
+        app.status_width = 120;
+    }
+
+    /// Covers F3.
+    #[test]
+    fn jumping_from_a_backlink_selects_the_linking_item() {
+        let (mut app, _) = test_app();
+        wide(&mut app);
+        let b = create_task(&mut app, "B");
+        let bid = stable_id_of(&app, b);
+        let a = create_task(&mut app, &format!("A [[{bid}]]"));
+        select(&mut app, b);
+
+        let content = app.pane_content();
+        assert_eq!(content.backlinks.len(), 1);
+        press(&mut app, KeyCode::Char('o'));
+        assert!(app.pane.focused);
+        press(&mut app, KeyCode::Enter);
+
+        assert_eq!(app.selected_id(), Some(a));
+        assert!(!app.pane.focused, "focus returns to the list after a jump");
+    }
+
+    #[test]
+    fn jump_reveals_a_hidden_completed_task_without_saving_config() {
+        let (mut app, config_path) = test_app();
+        wide(&mut app);
+        let done = create_task(&mut app, "Done thing");
+        app.taskbook.check_tasks_silent(&[done]).unwrap();
+        app.refresh_items().unwrap();
+        app.filter.hide_completed = true;
+        app.update_display_order();
+        assert!(!app.display_order.contains(&done));
+        let before = std::fs::read_to_string(&config_path).ok();
+
+        app.jump_to(done).unwrap();
+        assert_eq!(app.selected_id(), Some(done));
+        assert!(app.filter.hide_completed);
+        assert_eq!(std::fs::read_to_string(&config_path).ok(), before);
+    }
+
+    #[test]
+    fn jump_from_archive_view_keeps_the_saved_default_view() {
+        let (mut app, config_path) = test_app();
+        let t = create_task(&mut app, "Target");
+        app.set_view(ViewMode::Archive).unwrap();
+        let saved = std::fs::read_to_string(&config_path).unwrap();
+
+        app.jump_to(t).unwrap();
+        assert_eq!(app.view, ViewMode::Board);
+        assert_eq!(app.selected_id(), Some(t));
+        assert_eq!(std::fs::read_to_string(&config_path).unwrap(), saved);
+    }
+
+    #[test]
+    fn jump_clears_search_and_board_filter_and_says_so() {
+        let (mut app, _) = test_app();
+        let t = create_task(&mut app, "Target");
+        app.filter.search_term = Some("nomatch".into());
+        app.filter.board_filter = Some("elsewhere".into());
+        app.update_display_order();
+
+        app.jump_to(t).unwrap();
+        assert_eq!(app.selected_id(), Some(t));
+        assert!(app.filter.search_term.is_none() && app.filter.board_filter.is_none());
+        let status = app.status_message.as_ref().unwrap().text.clone();
+        assert!(
+            status.contains("search") && status.contains("board"),
+            "{status}"
+        );
+    }
+
+    #[test]
+    fn broken_and_divergent_entries_are_not_jumpable() {
+        let (mut app, _) = test_app();
+        wide(&mut app);
+        let missing = taskbook_common::stable_id::from_timestamp(9_999);
+        let a = create_task(&mut app, &format!("A [[{missing}]]"));
+        select(&mut app, a);
+
+        press(&mut app, KeyCode::Char('o'));
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.selected_id(), Some(a));
+        assert!(app.pane.focused);
+    }
+
+    #[test]
+    fn narrow_terminal_keys_explain_the_hidden_pane() {
+        let (mut app, _) = test_app();
+        app.status_width = 80;
+        create_task(&mut app, "x");
+
+        press(&mut app, KeyCode::Char('v'));
+        let status = app.status_message.as_ref().unwrap().text.clone();
+        assert!(status.contains("100 columns"), "{status}");
+
+        press(&mut app, KeyCode::Char('o'));
+        assert_eq!(
+            app.status_message.as_ref().unwrap().text,
+            "Link pane hidden"
+        );
+        assert!(!app.pane.focused);
+    }
+
+    #[test]
+    fn pane_cursor_clamps_to_the_current_entries() {
+        let (mut app, _) = test_app();
+        let b = create_task(&mut app, "B");
+        let bid = stable_id_of(&app, b);
+        create_task(&mut app, &format!("A [[{bid}]]"));
+        select(&mut app, b);
+        app.pane.cursor = 5;
+        let content = app.pane_content();
+        assert_eq!(app.pane_cursor(&content), 0);
+    }
+
+    #[test]
+    fn archived_item_lists_active_backlinks() {
+        let (mut app, _) = test_app();
+        let t = create_task(&mut app, "Target");
+        let tid = stable_id_of(&app, t);
+        for name in ["A", "B", "C"] {
+            create_task(&mut app, &format!("{name} [[{tid}]]"));
+        }
+        app.taskbook.delete_items_silent(&[t]).unwrap();
+        app.set_view(ViewMode::Archive).unwrap();
+        app.selected_index = 0;
+
+        let content = app.pane_content();
+        let titles: Vec<String> = content.backlinks.iter().map(|e| e.title.clone()).collect();
+        assert_eq!(titles.len(), 3, "{titles:?}");
+    }
+
+    #[test]
+    fn divergent_selection_shows_no_backlinks() {
+        let (mut app, _) = test_app();
+        let mut twin = taskbook_common::Task::new(90, "Twin".into(), vec!["my board".into()], 1);
+        twin.timestamp = 1;
+        let mut twin2 = twin.clone();
+        twin2.id = 91;
+        for t in [twin, twin2] {
+            app.active_items
+                .insert(t.id.to_string(), StorageItem::Task(t));
+        }
+        app.items = app.active_items.clone();
+        app.links = LinkIndex::build(app.active_items.values());
+        app.update_display_order();
+        app.selected_index = 0;
+
+        let content = app.pane_content();
+        assert!(content.divergent);
+        assert!(content.backlinks.is_empty());
     }
 }

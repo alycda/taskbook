@@ -3,9 +3,11 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crate::editor;
 use crate::error::Result;
 use taskbook_common::board;
-use taskbook_common::links::{self, Rejection, Rewrite};
+use taskbook_common::links::{self, Rejection, Rewrite, Target};
 
-use super::app::{App, PendingAction, PopupState, StatusKind, SuggestionKind, ViewMode};
+use super::app::{
+    App, PendingAction, PopupState, StatusKind, SuggestionKind, ViewMode, PANE_MIN_WIDTH,
+};
 use super::autocomplete;
 use super::command_parser::{self, ParsedCommand};
 use super::input_handler::{handle_text_input, InputResult};
@@ -43,8 +45,49 @@ pub fn handle_key_event(app: &mut App, key: KeyEvent) -> Result<()> {
         return handle_command_line_key(app, key);
     }
 
-    // 4. Normal mode shortcuts
+    // 4. Link pane focused → move, jump, or return to the list. Focus goes
+    //    back to the list if the pane was hidden (toggled off or too narrow).
+    if app.pane.focused {
+        if app.pane_shown() {
+            return handle_pane_key(app, key);
+        }
+        app.pane.focused = false;
+    }
+
+    // 5. Normal mode shortcuts
     handle_shortcut_key(app, key)
+}
+
+/// Handle keys while the link pane has focus
+fn handle_pane_key(app: &mut App, key: KeyEvent) -> Result<()> {
+    let content = app.pane_content();
+    let cursor = app.pane_cursor(&content);
+    match key.code {
+        KeyCode::Char('j') | KeyCode::Down => {
+            app.pane.cursor = (cursor + 1).min(content.len().saturating_sub(1));
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            app.pane.cursor = cursor.saturating_sub(1);
+        }
+        KeyCode::Enter => match content.get(cursor).map(|e| (e.jump_target(), e.target)) {
+            Some((Some(numeric), _)) => app.jump_to(numeric)?,
+            Some((None, Target::Divergent)) => {
+                app.set_status(
+                    "Two items share that ID; cannot jump".to_string(),
+                    StatusKind::Info,
+                );
+            }
+            Some((None, _)) => {
+                app.set_status("That link is broken".to_string(), StatusKind::Info);
+            }
+            None => {}
+        },
+        KeyCode::Esc | KeyCode::Char('o') => {
+            app.pane.focused = false;
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 /// Handle keys when a confirmation is pending
@@ -552,6 +595,31 @@ fn handle_shortcut_key(app: &mut App, key: KeyEvent) -> Result<()> {
                 app.command_line.link_baseline = Some((id, desc));
             }
         }
+        // Link pane: toggle and focus
+        KeyCode::Char('v') => {
+            app.pane.visible = !app.pane.visible;
+            if app.status_width < PANE_MIN_WIDTH {
+                let state = if app.pane.visible { "on" } else { "off" };
+                app.set_status(
+                    format!(
+                        "Link pane needs {} columns (toggle {})",
+                        PANE_MIN_WIDTH, state
+                    ),
+                    StatusKind::Info,
+                );
+            }
+        }
+        KeyCode::Char('o') => {
+            if !app.pane_shown() {
+                app.set_status("Link pane hidden".to_string(), StatusKind::Info);
+            } else if app.pane_content().is_empty() {
+                app.set_status("No links for this item".to_string(), StatusKind::Info);
+            } else {
+                app.pane.focused = true;
+                app.pane.cursor = 0;
+            }
+        }
+
         KeyCode::Char('l') if app.view != ViewMode::Archive => {
             if let Some(item) = app.selected_item() {
                 let id = item.id();

@@ -61,6 +61,14 @@ pub fn render_help_popup(frame: &mut Frame, app: &App, scroll: u16) {
             Span::styled("    l            ", key_style),
             Span::styled("Link selected item to another", desc_style),
         ]),
+        Line::from(vec![
+            Span::styled("    v            ", key_style),
+            Span::styled("Toggle link pane (100+ columns)", desc_style),
+        ]),
+        Line::from(vec![
+            Span::styled("    o            ", key_style),
+            Span::styled("Focus link pane (Enter jumps)", desc_style),
+        ]),
         Line::from(""),
         Line::from(Span::styled("  Quick Actions", section_style)),
         Line::from(vec![
