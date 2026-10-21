@@ -50,7 +50,7 @@ Because sync stores items as opaque client-encrypted blobs and replaces the whol
 
 - R1. Every task and note has a stable ID that is assigned once and never changes across edit, move, star, state change, archive, restore, or sync.
 - R2. Stable IDs use a letters-only alphabet, so no stable ID or prefix of one can be read as a numeric ID.
-- R3. An item with no stable ID receives one the first time the new version loads it, derived deterministically from data that never changes after creation, so independent clients assign identical IDs.
+- R3. Every stable ID, for new and pre-existing items alike, is a deterministic function of creation fields that never change and that older versions preserve, so any client that finds an item without one (on first upgrade, or after an older version dropped it) assigns the identical ID.
 - R4. Numeric IDs keep their current allocation and behavior for every existing CLI, TUI, and MCP operation.
 - R5. Older taskbook-rs versions can still read item data written by this version.
 - R6. The TUI shows each item's stable ID as its shortest unique prefix, visually distinguished, next to the numeric ID.
@@ -161,7 +161,8 @@ flowchart LR
 
 ### Dependencies / Assumptions
 
-- The original Node.js taskbook has not been checked for whether it keeps unknown item fields when it rewrites `storage.json`. If it drops them, editing the same data with Node once removes every stable ID and breaks every link.
+- Older taskbook-rs versions, including a long-running `tb --mcp` process started before the upgrade, drop the unknown stable-ID field on any write because the item structs keep no unknown fields. R3 re-derives the same IDs on the next load by the new version, so links survive a mixed-version window.
+- The original Node.js taskbook has not been checked for whether it keeps unknown item fields when it rewrites `storage.json`. If it drops them, R3 re-derives the IDs as long as Node preserves the creation fields they are derived from.
 - MCP `edit_item` replaces the whole description (`crates/taskbook-client/src/mcp/tools.rs:387`), so an agent that rewrites a title without copying a token removes that link, and nothing catches it.
 - The first load after upgrade writes the full dataset once to persist backfilled IDs; with sync enabled that is a one-time full upload.
 - Sync stays last-write-wins on the whole item set (`crates/taskbook-server/src/handlers/items.rs:144`); this plan does not change it.
@@ -174,8 +175,8 @@ flowchart LR
 
 **Deferred to Planning**
 
-- Stable-ID length and exact alphabet, and how a random ID that collides with an existing one is handled.
-- Which immutable inputs drive the deterministic backfill, and how two items created in the same millisecond with identical content are kept distinct.
+- Stable-ID length and exact alphabet, and how a derived ID that collides with an existing one is handled.
+- Which immutable creation fields drive the derivation (`_timestamp` and `_isTask` are the only ones that never change today), and how two items with the same creation timestamp get distinct IDs.
 - Whether R11's appended token goes into a note's title or body.
 - Side-pane focus model and keybinds (switching focus between list and pane, the link keybind, the toggle key), and the minimum-width threshold.
 - How the `[[` autocomplete trigger fits the existing autocomplete, which today runs only for `/`-prefixed command input.
