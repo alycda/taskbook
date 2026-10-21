@@ -244,6 +244,197 @@ pub fn rewrite_on_save(
     Ok(Rewrite { text, linked })
 }
 
+/// Full stable IDs that `text` links to, deduplicated, in order of first
+/// appearance.
+pub fn link_targets(text: &str) -> Vec<String> {
+    let mut targets: Vec<String> = Vec::new();
+    for span in scan(text).into_iter().filter(|s| s.kind == SpanKind::Full) {
+        let id = &text[span.inner];
+        if !targets.iter().any(|t| t == id) {
+            targets.push(id.to_string());
+        }
+    }
+    targets
+}
+
+/// What a link's target resolves to among the active items.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Target {
+    Active { numeric: u64 },
+    Divergent,
+    Missing,
+}
+
+/// One piece of rendered text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Segment {
+    Text(String),
+    /// A resolved link: the target's current title, with tokens inside that
+    /// title shown as short stable IDs (one level, so cycles cannot recurse).
+    Link {
+        id: String,
+        title: String,
+    },
+    Broken {
+        id: String,
+    },
+    Divergent {
+        id: String,
+    },
+}
+
+/// Outgoing links, backlinks, display prefixes and rendering over the active
+/// items, rebuilt whenever the item set changes.
+#[derive(Debug, Default)]
+pub struct LinkIndex {
+    resolver: Resolver,
+    titles: HashMap<String, String>,
+    numeric_by_id: HashMap<String, u64>,
+    prefix_lens: HashMap<String, usize>,
+    outgoing: HashMap<u64, Vec<String>>,
+    inbound: HashMap<String, Vec<u64>>,
+}
+
+impl LinkIndex {
+    pub fn build<'a, I>(items: I) -> Self
+    where
+        I: IntoIterator<Item = &'a StorageItem>,
+    {
+        let items: Vec<&StorageItem> = items.into_iter().collect();
+        let resolver = Resolver::from_items(items.iter().copied());
+
+        let mut titles = HashMap::new();
+        let mut numeric_by_id = HashMap::new();
+        let mut outgoing = HashMap::new();
+        let mut inbound: HashMap<String, Vec<u64>> = HashMap::new();
+        for item in &items {
+            let own_id = item.stable_id();
+            titles.insert(own_id.clone(), item.description().to_string());
+            numeric_by_id.insert(own_id.clone(), item.id());
+
+            let mut targets = link_targets(item.description());
+            if let Some(body) = item.note_body() {
+                for id in link_targets(body) {
+                    if !targets.contains(&id) {
+                        targets.push(id);
+                    }
+                }
+            }
+            for id in targets.iter().filter(|id| **id != own_id) {
+                inbound.entry(id.clone()).or_default().push(item.id());
+            }
+            outgoing.insert(item.id(), targets);
+        }
+        for sources in inbound.values_mut() {
+            sources.sort_unstable();
+            sources.dedup();
+        }
+
+        let prefix_lens =
+            stable_id::shortest_unique_prefix_lengths(resolver.ids.iter().map(String::as_str));
+
+        Self {
+            resolver,
+            titles,
+            numeric_by_id,
+            prefix_lens,
+            outgoing,
+            inbound,
+        }
+    }
+
+    pub fn resolver(&self) -> &Resolver {
+        &self.resolver
+    }
+
+    pub fn target(&self, id: &str) -> Target {
+        if self.resolver.is_divergent(id) {
+            return Target::Divergent;
+        }
+        self.numeric_by_id
+            .get(id)
+            .map_or(Target::Missing, |&numeric| Target::Active { numeric })
+    }
+
+    /// Stable IDs the active item `numeric` links to.
+    pub fn outgoing(&self, numeric: u64) -> &[String] {
+        self.outgoing.get(&numeric).map_or(&[], Vec::as_slice)
+    }
+
+    /// Active items (numeric IDs, ascending) whose text links to `id`,
+    /// excluding the item that holds `id` itself. Works for IDs with no active
+    /// item, such as an archived one.
+    pub fn backlinks(&self, id: &str) -> &[u64] {
+        self.inbound.get(id).map_or(&[], Vec::as_slice)
+    }
+
+    /// Length of the shortest prefix that tells `id` apart from every active
+    /// item's ID (computed against the active set plus `id` itself).
+    pub fn prefix_len(&self, id: &str) -> usize {
+        if let Some(&len) = self.prefix_lens.get(id) {
+            return len;
+        }
+        let ids = &self.resolver.ids;
+        let at = ids.partition_point(|other| other.as_str() < id);
+        let common = |other: &String| {
+            other
+                .bytes()
+                .zip(id.bytes())
+                .take_while(|(a, b)| a == b)
+                .count()
+        };
+        let shared = at
+            .checked_sub(1)
+            .map_or(0, |i| common(&ids[i]))
+            .max(ids.get(at).map_or(0, common));
+        (shared + 1).min(id.len())
+    }
+
+    /// `id` cut to its shortest unique prefix.
+    pub fn short_id<'a>(&self, id: &'a str) -> &'a str {
+        &id[..self.prefix_len(id).min(id.len())]
+    }
+
+    /// Split `text` into plain text and link segments.
+    pub fn render(&self, text: &str) -> Vec<Segment> {
+        let mut segments = Vec::new();
+        let mut copied_to = 0;
+        for span in scan(text).into_iter().filter(|s| s.kind == SpanKind::Full) {
+            if span.range.start > copied_to {
+                segments.push(Segment::Text(text[copied_to..span.range.start].to_string()));
+            }
+            let id = text[span.inner.clone()].to_string();
+            segments.push(match self.target(&id) {
+                Target::Active { .. } => Segment::Link {
+                    title: self.flat_title(&id),
+                    id,
+                },
+                Target::Divergent => Segment::Divergent { id },
+                Target::Missing => Segment::Broken { id },
+            });
+            copied_to = span.range.end;
+        }
+        if copied_to < text.len() {
+            segments.push(Segment::Text(text[copied_to..].to_string()));
+        }
+        segments
+    }
+
+    /// A target's title with its own tokens shown as short IDs.
+    fn flat_title(&self, id: &str) -> String {
+        let title = self.titles.get(id).map_or("", String::as_str);
+        let mut flat = String::with_capacity(title.len());
+        let mut copied_to = 0;
+        for span in scan(title).into_iter().filter(|s| s.kind == SpanKind::Full) {
+            flat.push_str(&title[copied_to..span.range.start]);
+            flat.push_str(self.short_id(&title[span.inner.clone()]));
+            copied_to = span.range.end;
+        }
+        flat.push_str(&title[copied_to..]);
+        flat
+    }
+}
+
 /// Separator used to diff a note's title and body as one text, so a reference
 /// moved between the two is not treated as added. It never occurs in a span's
 /// reference forms, so no reference can straddle the two fields.
@@ -480,5 +671,161 @@ mod tests {
         let r = Resolver::from_items(std::iter::empty());
         let err = rewrite_on_save("", "[[98]] [[99]] [[mm]]", &r).unwrap_err();
         assert_eq!(err.len(), 3);
+    }
+    // ----- link index -----
+
+    fn titled_task(id: u64, ts: i64, desc: String) -> StorageItem {
+        let mut t = Task::new(id, desc, vec!["My Board".to_string()], 1);
+        t.timestamp = ts;
+        StorageItem::Task(t)
+    }
+
+    fn token(ts: i64) -> String {
+        format!("[[{}]]", stable_id::from_timestamp(ts))
+    }
+
+    #[test]
+    fn outgoing_and_backlinks_dedupe_and_exclude_self() {
+        let (a, b) = (1_000, 2_000);
+        let items = [
+            titled_task(1, a, format!("A {} {} {}", token(b), token(b), token(a))),
+            titled_task(2, b, "B".to_string()),
+        ];
+        let idx = LinkIndex::build(items.iter());
+        let (ida, idb) = (stable_id::from_timestamp(a), stable_id::from_timestamp(b));
+
+        assert_eq!(idx.outgoing(1), [idb.clone(), ida.clone()]);
+        assert_eq!(idx.backlinks(&idb), [1]);
+        assert!(idx.backlinks(&ida).is_empty());
+    }
+
+    #[test]
+    fn link_to_missing_id_is_broken_but_still_findable_by_id() {
+        let missing = stable_id::from_timestamp(9_999);
+        let items = [titled_task(1, 1_000, format!("A [[{missing}]]"))];
+        let idx = LinkIndex::build(items.iter());
+
+        assert_eq!(idx.target(&missing), Target::Missing);
+        assert_eq!(idx.backlinks(&missing), [1]);
+        assert_eq!(
+            idx.render(&format!("A [[{missing}]]")),
+            vec![
+                Segment::Text("A ".to_string()),
+                Segment::Broken { id: missing }
+            ]
+        );
+    }
+
+    /// Covers AE5 (index half).
+    #[test]
+    fn archiving_and_restoring_a_target_toggles_its_links() {
+        let t = 5_000;
+        let linking = |id| titled_task(id, 1_000 + id as i64, format!("see {}", token(t)));
+        let target = titled_task(7, t, "Target".to_string());
+        let tid = stable_id::from_timestamp(t);
+
+        let without = [linking(1), linking(2), linking(3)];
+        let idx = LinkIndex::build(without.iter());
+        assert_eq!(idx.target(&tid), Target::Missing);
+        assert_eq!(idx.backlinks(&tid), [1, 2, 3]);
+
+        let with: Vec<StorageItem> = without.iter().cloned().chain([target]).collect();
+        let idx = LinkIndex::build(with.iter());
+        assert_eq!(idx.target(&tid), Target::Active { numeric: 7 });
+        assert_eq!(idx.backlinks(&tid), [1, 2, 3]);
+    }
+
+    #[test]
+    fn shared_ids_are_divergent() {
+        let ts = 3_000;
+        let items = [titled_task(1, ts, "x".into()), note(2, ts)];
+        let idx = LinkIndex::build(items.iter());
+        let id = stable_id::from_timestamp(ts);
+        assert_eq!(idx.target(&id), Target::Divergent);
+        assert_eq!(
+            idx.render(&format!("[[{id}]]")),
+            vec![Segment::Divergent { id }]
+        );
+    }
+
+    #[test]
+    fn rendering_substitutes_one_level_only() {
+        let (a, b) = (1_000, 2_000);
+        let items = [
+            titled_task(1, a, format!("see {}", token(b))),
+            titled_task(2, b, format!("re {}", token(a))),
+        ];
+        let idx = LinkIndex::build(items.iter());
+        let ida = stable_id::from_timestamp(a);
+        let idb = stable_id::from_timestamp(b);
+
+        let rendered = idx.render(&format!("x {}", token(a)));
+        assert_eq!(
+            rendered,
+            vec![
+                Segment::Text("x ".to_string()),
+                Segment::Link {
+                    id: ida,
+                    title: format!("see {}", idx.short_id(&idb)),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn prefix_lengths_cover_active_and_outside_ids() {
+        let a = ts_with_prefix("kq", 0);
+        let b = ts_with_prefix("kq", a + 1);
+        let c = ts_with_prefix("z", 0);
+        let items = [task(1, a), task(2, b), task(3, c)];
+        let idx = LinkIndex::build(items.iter());
+        let ida = stable_id::from_timestamp(a);
+
+        assert!(idx.prefix_len(&ida) >= 3);
+        assert_eq!(idx.prefix_len(&stable_id::from_timestamp(c)), 1);
+        // An archived ID sharing "kq" needs at least 3 letters too.
+        let outside = "kqkkkkkkkkkkkkkk";
+        assert!(idx.prefix_len(outside) >= 3);
+        assert!(idx.short_id(outside).starts_with("kq"));
+    }
+
+    #[test]
+    fn link_targets_in_order_of_first_appearance() {
+        let text = format!("{} {} {} [[12]]", token(2), token(1), token(2));
+        assert_eq!(
+            link_targets(&text),
+            vec![stable_id::from_timestamp(2), stable_id::from_timestamp(1)]
+        );
+    }
+
+    #[test]
+    fn note_bodies_contribute_links() {
+        let mut n = Note::new_with_body(
+            1,
+            "N".into(),
+            Some(format!("body {}", token(2_000))),
+            vec![],
+        );
+        n.timestamp = 1_000;
+        let items = [StorageItem::Note(n), titled_task(2, 2_000, "T".into())];
+        let idx = LinkIndex::build(items.iter());
+        assert_eq!(idx.backlinks(&stable_id::from_timestamp(2_000)), [1]);
+    }
+
+    #[test]
+    fn index_build_scales_to_thousands_of_items() {
+        let items: Vec<StorageItem> = (0..5_000)
+            .map(|i| {
+                titled_task(
+                    i + 1,
+                    1_000 + i as i64,
+                    format!("item {} {}", i, token(1_000 + (i as i64 + 1) % 5_000)),
+                )
+            })
+            .collect();
+        let start = std::time::Instant::now();
+        let idx = LinkIndex::build(items.iter());
+        assert_eq!(idx.backlinks(&stable_id::from_timestamp(1_000)).len(), 1);
+        assert!(start.elapsed() < std::time::Duration::from_secs(2));
     }
 }
