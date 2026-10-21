@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -9,6 +9,7 @@ use crate::error::Result;
 use crate::render::Stats;
 use crate::taskbook::Taskbook;
 use taskbook_common::board;
+use taskbook_common::links::LinkIndex;
 use taskbook_common::StorageItem;
 
 /// Sort items by the given method
@@ -59,8 +60,12 @@ pub struct App {
     pub selected_index: usize,
     /// List of boards for navigation
     pub boards: Vec<String>,
-    /// Cached items grouped by board/date
+    /// Items shown by the current view (the archive in Archive view)
     pub items: HashMap<String, StorageItem>,
+    /// Active items, loaded in every view; the link index is built from these
+    pub active_items: HashMap<String, StorageItem>,
+    /// Links and backlinks among the active items
+    pub links: LinkIndex,
     /// Active popup/dialog state (Help only)
     pub popup: Option<PopupState>,
     /// Command line state
@@ -91,6 +96,8 @@ pub struct App {
     pub history_index: Option<usize>,
     /// Saved input before browsing history
     pub history_saved_input: String,
+    /// Where config changes are written (`None` = the user's config file)
+    config_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -182,6 +189,17 @@ impl App {
     pub fn new(taskbook_dir: Option<&Path>) -> Result<Self> {
         let taskbook = Taskbook::new(taskbook_dir)?;
         let config = Config::load_or_default();
+        Self::build(taskbook, config, None)
+    }
+
+    /// Build an app over an explicit store, writing config changes to
+    /// `config_path` instead of the user's config file (for tests).
+    #[cfg(test)]
+    pub fn with_taskbook(taskbook: Taskbook, config: Config, config_path: PathBuf) -> Result<Self> {
+        Self::build(taskbook, config, Some(config_path))
+    }
+
+    fn build(taskbook: Taskbook, config: Config, config_path: Option<PathBuf>) -> Result<Self> {
         let theme = TuiTheme::from(&config.theme.resolve());
 
         let initial_view = config.default_view;
@@ -192,6 +210,8 @@ impl App {
             selected_index: 0,
             boards: Vec::new(),
             items: HashMap::new(),
+            active_items: HashMap::new(),
+            links: LinkIndex::default(),
             popup: None,
             command_line: CommandLineState::default(),
             status_message: None,
@@ -209,6 +229,7 @@ impl App {
             command_history: Vec::new(),
             history_index: None,
             history_saved_input: String::new(),
+            config_path,
             cached_stats: Stats {
                 percent: 0,
                 complete: 0,
@@ -220,20 +241,19 @@ impl App {
 
         app.refresh_items()?;
 
-        // If restoring archive view, load archive items instead
-        if initial_view == ViewMode::Archive {
-            app.items = app.taskbook.get_all_archive_items()?;
-            app.update_display_order();
-            app.recalculate_stats();
-        }
-
         Ok(app)
     }
 
-    /// Refresh items from storage
+    /// Refresh items from storage and rebuild the link index
     pub fn refresh_items(&mut self) -> Result<()> {
-        self.items = self.taskbook.get_all_items()?;
+        self.active_items = self.taskbook.get_all_items()?;
+        self.links = LinkIndex::build(self.active_items.values());
         self.boards = self.taskbook.get_all_boards()?;
+        self.items = if self.view == ViewMode::Archive {
+            self.taskbook.get_all_archive_items()?
+        } else {
+            self.active_items.clone()
+        };
         self.update_display_order();
         self.recalculate_stats();
 
@@ -400,7 +420,7 @@ impl App {
     pub fn cycle_sort_method(&mut self) {
         self.sort_method = self.sort_method.next();
         self.config.sort_method = self.sort_method;
-        let _ = self.config.save();
+        self.save_config();
         self.update_display_order();
     }
 
@@ -408,7 +428,7 @@ impl App {
     pub fn toggle_hide_completed(&mut self) {
         self.filter.hide_completed = !self.filter.hide_completed;
         self.config.display_complete_tasks = !self.filter.hide_completed;
-        let _ = self.config.save();
+        self.save_config();
         self.update_display_order();
         // Clamp selection
         if !self.display_order.is_empty() && self.selected_index >= self.display_order.len() {
@@ -517,19 +537,19 @@ impl App {
 
             // Persist the view choice
             self.config.default_view = view;
-            let _ = self.config.save();
+            self.save_config();
 
-            // Reload data for archive view
-            if view == ViewMode::Archive {
-                self.items = self.taskbook.get_all_archive_items()?;
-            } else {
-                self.items = self.taskbook.get_all_items()?;
-            }
-
-            self.update_display_order();
-            self.recalculate_stats();
+            self.refresh_items()?;
         }
         Ok(())
+    }
+
+    /// Persist config changes; failures are not worth interrupting the TUI.
+    fn save_config(&self) {
+        let _ = match &self.config_path {
+            Some(path) => self.config.save_to(path),
+            None => self.config.save(),
+        };
     }
 
     /// Activate the command line with an optional prefix
@@ -566,5 +586,95 @@ impl App {
     /// Quit the application
     pub fn quit(&mut self) {
         self.running = false;
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+    use crate::storage::LocalStorage;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use taskbook_common::links::Target;
+
+    /// An `App` over a fresh temp store whose config writes go to a temp file.
+    pub(crate) fn test_app() -> (App, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("tb-app-test-{}", uuid::Uuid::new_v4()));
+        let taskbook = Taskbook::with_storage(Box::new(LocalStorage::new(&dir).unwrap()));
+        let config_path = dir.join("config.json");
+        let app = App::with_taskbook(taskbook, Config::default(), config_path.clone()).unwrap();
+        (app, config_path)
+    }
+
+    pub(crate) fn key(c: char) -> KeyEvent {
+        KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE)
+    }
+
+    fn create_task(app: &mut App, desc: &str) -> u64 {
+        let id = app
+            .taskbook
+            .create_task_direct_with_tags(vec!["My Board".into()], desc.into(), 1, vec![], None)
+            .unwrap();
+        app.refresh_items().unwrap();
+        id
+    }
+
+    fn stable_id_of(app: &App, numeric: u64) -> String {
+        app.items[&numeric.to_string()].stable_id()
+    }
+
+    /// Covers AE5.
+    #[test]
+    fn restoring_a_linked_item_revives_its_backlinks() {
+        let (mut app, _) = test_app();
+        let t = create_task(&mut app, "Target");
+        let tid = stable_id_of(&app, t);
+        for name in ["A", "B", "C"] {
+            create_task(&mut app, &format!("{name} [[{tid}]]"));
+        }
+        assert_eq!(app.links.backlinks(&tid).len(), 3);
+
+        app.taskbook.delete_items_silent(&[t]).unwrap();
+        app.refresh_items().unwrap();
+        assert_eq!(app.links.target(&tid), Target::Missing);
+        assert_eq!(app.links.backlinks(&tid).len(), 3);
+
+        app.set_view(ViewMode::Archive).unwrap();
+        let archived = app.display_order[0];
+        app.selected_index = 0;
+        super::super::actions::handle_key_event(&mut app, key('r')).unwrap();
+
+        assert!(matches!(app.links.target(&tid), Target::Active { .. }));
+        assert_eq!(app.links.backlinks(&tid).len(), 3);
+        assert!(
+            !app.items.contains_key(&archived.to_string()),
+            "restored row must leave the archive list at once"
+        );
+    }
+
+    #[test]
+    fn archive_view_keeps_an_index_of_active_items() {
+        let (mut app, _) = test_app();
+        let t = create_task(&mut app, "Target");
+        let tid = stable_id_of(&app, t);
+        create_task(&mut app, &format!("A [[{tid}]]"));
+
+        app.set_view(ViewMode::Archive).unwrap();
+        assert!(app.items.is_empty());
+        assert_eq!(app.links.target(&tid), Target::Active { numeric: t });
+        assert_eq!(app.links.backlinks(&tid).len(), 1);
+
+        app.refresh_items().unwrap();
+        assert!(
+            app.items.is_empty(),
+            "refresh in archive view keeps showing the archive"
+        );
+    }
+
+    #[test]
+    fn config_writes_go_to_the_test_path() {
+        let (mut app, config_path) = test_app();
+        app.set_view(ViewMode::Archive).unwrap();
+        let saved = std::fs::read_to_string(&config_path).unwrap();
+        assert!(saved.contains("archive"), "{saved}");
     }
 }

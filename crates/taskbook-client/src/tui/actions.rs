@@ -594,7 +594,8 @@ fn delete_items(app: &mut App, ids: &[u64]) -> Result<()> {
 
 fn restore_item(app: &mut App, id: u64) -> Result<()> {
     app.taskbook.restore_items_silent(&[id])?;
-    app.set_view(ViewMode::Archive)?;
+    // Already in Archive view, so set_view would not reload anything.
+    app.refresh_items()?;
     app.set_status(format!("Restored item {}", id), StatusKind::Success);
     Ok(())
 }

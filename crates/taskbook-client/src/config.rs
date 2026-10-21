@@ -377,12 +377,16 @@ impl Config {
 
     /// Save the configuration to file
     pub fn save(&self) -> Result<()> {
-        let config_path = Self::config_file_path();
+        self.save_to(&Self::config_file_path())
+    }
+
+    /// Save the configuration to an explicit path
+    pub fn save_to(&self, config_path: &Path) -> Result<()> {
         if let Some(parent) = config_path.parent() {
             fs::create_dir_all(parent)?;
         }
         let data = serde_json::to_string_pretty(self)?;
-        fs::write(&config_path, data)?;
+        fs::write(config_path, data)?;
         Ok(())
     }
 
