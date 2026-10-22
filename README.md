@@ -182,14 +182,18 @@ This implementation uses the same data format and directory (`~/.taskbook/`) as 
 
 ## Limits
 
-taskbook is built for a personal list, not a database. Every command reads,
-parses and rewrites the whole JSON file, and sync uploads every item on each
-change. The supported size is **1,024 active and 4,096 archived items**; we
-recommend staying under **512 active**. Larger stores may work but are
-unsupported, and features are not designed for them. For example, two items
-created in the same millisecond on different devices can share a stable ID
-(shown as `??`), which is acceptable at this scale.
+taskbook is a task board for a person, like the original: something you read
+and keep up with yourself. We recommend staying under **512 active items**;
+more than that is hard for anyone to keep track of. The supported size,
+**1,024 active and 4,096 archived items**, is headroom above that
+recommendation, and it applies when agents use taskbook through MCP too.
+Larger stores are unsupported, and features are not designed for them. For
+example, two items created in the same millisecond on different devices can
+share a stable ID (shown as `??`), which a person using the board will not
+realistically hit.
 
+Storage is a JSON file that every command reads and rewrites in full, and
+sync uploads every item on each change, which is fast at this size.
 Measured on a 4-vCPU 2.8 GHz Xeon with a release build (median of 7 runs):
 
 | Active / archived | Files | Board view | Create |
