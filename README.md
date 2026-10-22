@@ -187,7 +187,10 @@ and keep up with yourself. We recommend staying under **512 active items**;
 more than that is hard for anyone to keep track of. The supported size,
 **1,024 active and 4,096 archived items**, is headroom above that
 recommendation, and it applies when agents use taskbook through MCP too.
-Larger stores are unsupported, and features are not designed for them. For
+Larger stores are unsupported, and features are not designed for them.
+Past 512 active items (or 4,096 archived), the TUI header and MCP create
+results show a notice; it blocks nothing, and suggests `/clear` (`tb --clear`)
+only when there are completed tasks to archive. For
 example, two items created in the same millisecond on different devices can
 share a stable ID (shown as `??`), which a person using the board will not
 realistically hit.
