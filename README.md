@@ -180,6 +180,30 @@ See the [docs](docs/) folder for detailed documentation:
 
 This implementation uses the same data format and directory (`~/.taskbook/`) as the original Node.js version, allowing seamless migration.
 
+## Limits
+
+taskbook is built for a personal list, not a database. Every command reads,
+parses and rewrites the whole JSON file, and sync uploads every item on each
+change. The supported size is **1,024 active and 4,096 archived items**; we
+recommend staying under **512 active**. Larger stores may work but are
+unsupported, and features are not designed for them. For example, two items
+created in the same millisecond on different devices can share a stable ID
+(shown as `??`), which is acceptable at this scale.
+
+Measured on a 4-vCPU 2.8 GHz Xeon with a release build (median of 7 runs):
+
+| Active / archived | Files | Board view | Create |
+|---|---|---|---|
+| 256 / 4096 | 2.1 MB | 4 ms | 19 ms |
+| 512 / 4096 | 2.2 MB | 9 ms | 18 ms |
+| 1024 / 4096 | 2.4 MB | 9 ms | 20 ms |
+| 2048 / 8192 | 4.9 MB | 16 ms | 41 ms |
+
+Cost grows linearly with the number of stored items, about 4–5 ms per
+1,000 (active plus archived) per create on this machine. Sync mode transfers the whole store on every change, so its
+practical limit depends on your connection. To reproduce:
+`cargo build --release -p taskbook-client && python3 scripts/bench-envelope.py target/release/tb`.
+
 ## License
 
 MIT - see [LICENSE](LICENSE)

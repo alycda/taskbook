@@ -50,6 +50,7 @@ crates/
 │       ├── board.rs        # Board name handling, normalization, CLI input parsing
 │       ├── due.rs          # Due-date parsing/formatting/status (epoch millis)
 │       ├── encryption.rs   # AES-256-GCM encrypt/decrypt
+│       ├── limits.rs       # Supported store size (the design envelope)
 │       ├── links.rs        # [[stable-id]] link scanning, save-time rewrite, LinkIndex
 │       ├── stable_id.rs    # Stable item IDs derived from _timestamp (never stored)
 │       ├── error.rs        # CommonError type
@@ -119,9 +120,11 @@ crates/
    (honoring `$XDG_CONFIG_HOME`), falling back to the legacy
    `~/.taskbook.json` when it exists and the XDG file does not.
 
-6. **Stable IDs and Links**: An item's numeric `_id` changes on archive/restore, so links use a stable ID instead: an invertible mix of `_timestamp` written as 16 letters `k`-`z` (`taskbook-common/src/stable_id.rs`). It is computed on read and never stored; create paths keep `_timestamp` unique, and golden test vectors freeze the mapping (changing it breaks every link). Links are `[[stable-id]]` tokens in item text, resolved only in the TUI.
+6. **Design Envelope**: Storage is one JSON file per item set; every operation reads, parses and rewrites the whole file, and sync PUTs every item. The supported size is 1,024 active and 4,096 archived items, with 512 active recommended (`taskbook-common/src/limits.rs`, measured numbers in README "Limits"). Design features for that size: O(n) work per operation is fine, and indexes, caches or incremental storage are out of scope. Larger stores are unsupported, not edge cases to handle. Envelope tests in `taskbook.rs` and `tui/widgets/item_row.rs` check correctness at the supported size; the timing check is `#[ignore]`d (`cargo test -- --ignored`).
 
-7. **Storage Structure (Local)**:
+7. **Stable IDs and Links**: An item's numeric `_id` changes on archive/restore, so links use a stable ID instead: an invertible mix of `_timestamp` written as 16 letters `k`-`z` (`taskbook-common/src/stable_id.rs`). It is computed on read and never stored; create paths keep `_timestamp` unique, and golden test vectors freeze the mapping (changing it breaks every link). Two items created in the same millisecond on different devices share a stable ID (divergent, shown `??`); that tradeoff is acceptable within the design envelope. Links are `[[stable-id]]` tokens in item text, resolved only in the TUI.
+
+8. **Storage Structure (Local)**:
    ```
    ~/.taskbook/
    ├── storage/storage.json   # Active items
