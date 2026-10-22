@@ -1504,6 +1504,67 @@ mod tests {
 
     /// Covers AE7 (creation half): rapid creates through every path get
     /// distinct timestamps and therefore distinct stable IDs.
+    /// A store filled to the supported size, with every timestamp packed into
+    /// one run starting now: the worst case for keeping new creates unique.
+    fn envelope_taskbook() -> Taskbook {
+        use taskbook_common::limits::{SUPPORTED_ACTIVE_ITEMS, SUPPORTED_ARCHIVED_ITEMS};
+        let tb = test_taskbook();
+        let start = chrono::Utc::now().timestamp_millis();
+        let (active, archived) = (
+            SUPPORTED_ACTIVE_ITEMS as i64,
+            SUPPORTED_ARCHIVED_ITEMS as i64,
+        );
+        tb.save(&map_of(
+            (0..active)
+                .map(|i| task_at(i as u64 + 1, start + i))
+                .collect(),
+        ))
+        .unwrap();
+        tb.save_archive(&map_of(
+            (0..archived)
+                .map(|i| task_at(i as u64 + 1, start + active + i))
+                .collect(),
+        ))
+        .unwrap();
+        tb
+    }
+
+    #[test]
+    fn creates_stay_unique_at_the_supported_size() {
+        let tb = envelope_taskbook();
+        let board = vec![DEFAULT_BOARD.to_string()];
+        for i in 0..5 {
+            tb.create_task_direct_with_tags(board.clone(), format!("t{i}"), 1, vec![], None)
+                .unwrap();
+        }
+
+        let mut timestamps: Vec<i64> = tb
+            .get_data()
+            .unwrap()
+            .values()
+            .chain(tb.get_archive().unwrap().values())
+            .map(|item| item.timestamp())
+            .collect();
+        let total = timestamps.len();
+        timestamps.sort_unstable();
+        timestamps.dedup();
+        assert_eq!(timestamps.len(), total);
+    }
+
+    /// Loose latency budget at the supported size. Timing depends on the
+    /// machine, so it runs only on request: `cargo test -- --ignored`.
+    #[test]
+    #[ignore]
+    fn create_at_the_supported_size_is_fast() {
+        let tb = envelope_taskbook();
+        let board = vec![DEFAULT_BOARD.to_string()];
+        let started = std::time::Instant::now();
+        tb.create_task_direct_with_tags(board, "timed".into(), 1, vec![], None)
+            .unwrap();
+        let elapsed = started.elapsed();
+        assert!(elapsed.as_millis() < 500, "create took {elapsed:?}");
+    }
+
     #[test]
     fn rapid_creates_get_distinct_stable_ids() {
         let tb = test_taskbook();

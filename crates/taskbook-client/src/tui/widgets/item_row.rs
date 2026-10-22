@@ -352,4 +352,26 @@ mod tests {
         assert!(preview.chars().count() <= 53, "{preview}");
         assert!(preview.ends_with('…'));
     }
+
+    /// At the supported size, every active item's unique prefix fits the
+    /// stable-ID column, so rows stay aligned. Holds for these fixtures; past
+    /// the envelope a longer prefix widens the column instead.
+    #[test]
+    fn unique_prefixes_fit_the_column_at_the_supported_size() {
+        use taskbook_common::limits::SUPPORTED_ACTIVE_ITEMS;
+        let n = SUPPORTED_ACTIVE_ITEMS as i64;
+        // Consecutive milliseconds, and one item a minute.
+        for step in [1, 60_000] {
+            let items: Vec<StorageItem> = (0..n)
+                .map(|i| task(i as u64 + 1, 1_790_000_000_000 + i * step, "x"))
+                .collect();
+            let idx = LinkIndex::build(items.iter());
+            let widest = items
+                .iter()
+                .map(|item| idx.prefix_len(&item.stable_id()))
+                .max()
+                .unwrap();
+            assert!(widest <= STABLE_ID_WIDTH, "step {step}: prefix {widest}");
+        }
+    }
 }
