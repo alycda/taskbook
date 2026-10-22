@@ -163,10 +163,11 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                         app.items = app.taskbook.get_all_archive_items()?;
                         app.update_display_order();
                     }
-                    (ViewMode::Board | ViewMode::Timeline | ViewMode::Journal, false) => {
+                    // Active items feed the link index in every view.
+                    (_, false) => {
                         app.refresh_items()?;
                     }
-                    _ => {} // Data will be loaded when user switches views
+                    _ => {} // Archive data will be loaded when user switches views
                 }
             }
         }

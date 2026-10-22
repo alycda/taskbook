@@ -11,7 +11,7 @@ use super::app::{App, PopupState, ViewMode};
 use super::widgets::{
     board_view::render_board_view, command_line::render_autocomplete,
     command_line::render_command_line, help_popup::render_help_popup,
-    journal_view::render_journal_view, status_bar::render_stats_line,
+    journal_view::render_journal_view, link_pane::render_link_pane, status_bar::render_stats_line,
     timeline_view::render_timeline_view,
 };
 
@@ -28,8 +28,19 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         .split(frame.area());
 
     app.content_height = chunks[1].height;
+    app.status_width = chunks[3].width;
     render_header(frame, app, chunks[0]);
-    render_content(frame, app, chunks[1]);
+    if app.pane_shown() {
+        let pane_width = (chunks[1].width * 30 / 100).max(32);
+        let parts = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Min(1), Constraint::Length(pane_width)])
+            .split(chunks[1]);
+        render_content(frame, app, parts[0]);
+        render_link_pane(frame, app, parts[1]);
+    } else {
+        render_content(frame, app, chunks[1]);
+    }
     render_command_line(frame, app, chunks[2]);
     render_stats_line(frame, app, chunks[3]);
 
@@ -76,6 +87,12 @@ fn render_header(frame: &mut Frame, app: &App, area: Rect) {
     if app.filter.hide_completed {
         spans.push(Span::raw("  "));
         spans.push(Span::styled("[Hiding completed]", app.theme.warning));
+    }
+
+    // Store past the size taskbook is designed for (informational)
+    if let Some(notice) = app.size_notice() {
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled(format!("[{notice}]"), app.theme.warning));
     }
 
     let header = Line::from(spans);

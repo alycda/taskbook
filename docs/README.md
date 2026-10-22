@@ -40,6 +40,7 @@ tb --begin 2
 - **Tasks & Notes**: Create tasks with priorities and notes with rich body content
 - **Boards**: Organize items into custom boards
 - **Interactive TUI**: Full-featured terminal UI with keyboard navigation
+- **Links & Backlinks**: Link items inline with `[[…]]` in the TUI; a side pane shows what links where
 - **External Editor**: Compose and edit notes in your preferred editor (`$EDITOR`)
 - **Timeline View**: See items chronologically
 - **Search & Filter**: Find items by text or attributes

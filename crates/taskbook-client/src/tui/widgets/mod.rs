@@ -3,6 +3,7 @@ pub mod command_line;
 pub mod help_popup;
 pub mod item_row;
 pub mod journal_view;
+pub mod link_pane;
 pub mod status_bar;
 pub mod timeline_view;
 
@@ -43,5 +44,15 @@ pub(crate) fn render_scrollable_list(
             .end_symbol(None);
         let mut scrollbar_state = ScrollbarState::new(lines.len()).position(scroll_offset);
         frame.render_stateful_widget(scrollbar, area, &mut scrollbar_state);
+    }
+}
+
+/// `s` cut to at most `max` characters, ending in `…` when cut.
+pub(crate) fn truncate_chars(s: &str, max: usize) -> String {
+    if s.chars().count() > max {
+        let kept: String = s.chars().take(max.saturating_sub(1)).collect();
+        format!("{}…", kept)
+    } else {
+        s.to_string()
     }
 }

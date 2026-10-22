@@ -77,6 +77,32 @@ impl Taskbook {
         max + 1
     }
 
+    /// Give a new item a creation timestamp no active or archived item has.
+    fn stamp_unique(
+        &self,
+        item: &mut StorageItem,
+        active: &HashMap<String, StorageItem>,
+    ) -> Result<()> {
+        let archive = self.get_archive()?;
+        let ts = unique_timestamp(item.timestamp(), active, &archive);
+        match item {
+            StorageItem::Task(t) => t.timestamp = ts,
+            StorageItem::Note(n) => n.timestamp = ts,
+        }
+        Ok(())
+    }
+
+    /// Insert a newly created item into `data` with a unique creation timestamp.
+    fn insert_new(
+        &self,
+        data: &mut HashMap<String, StorageItem>,
+        mut item: StorageItem,
+    ) -> Result<()> {
+        self.stamp_unique(&mut item, data)?;
+        data.insert(item.id().to_string(), item);
+        Ok(())
+    }
+
     fn remove_duplicates(&self, ids: &[u64]) -> Vec<u64> {
         let mut seen = HashSet::with_capacity(ids.len());
         ids.iter().filter(|id| seen.insert(**id)).copied().collect()
@@ -360,6 +386,11 @@ impl Taskbook {
         self.get_archive()
     }
 
+    /// Get the boards of already-loaded items (for TUI)
+    pub fn boards_of(&self, data: &HashMap<String, StorageItem>) -> Vec<String> {
+        self.get_boards(data)
+    }
+
     /// Get all boards (for TUI)
     pub fn get_all_boards(&self) -> Result<Vec<String>> {
         let data = self.get_data()?;
@@ -396,7 +427,7 @@ impl Taskbook {
         let id = self.generate_id(&data);
         let task =
             Task::new_with_tags(id, description, boards, priority, tags).with_due_date(due_date);
-        data.insert(id.to_string(), StorageItem::Task(task));
+        self.insert_new(&mut data, StorageItem::Task(task))?;
         self.save(&data)?;
         Ok(id)
     }
@@ -421,7 +452,7 @@ impl Taskbook {
         let mut data = self.get_data()?;
         let id = self.generate_id(&data);
         let note = Note::new_with_tags(id, description, boards, tags);
-        data.insert(id.to_string(), StorageItem::Note(note));
+        self.insert_new(&mut data, StorageItem::Note(note))?;
         self.save(&data)?;
         Ok(id)
     }
@@ -441,7 +472,7 @@ impl Taskbook {
         let mut data = self.get_data()?;
         let id = self.generate_id(&data);
         let note = Note::new_with_body(id, title, body, boards);
-        data.insert(id.to_string(), StorageItem::Note(note));
+        self.insert_new(&mut data, StorageItem::Note(note))?;
         self.save(&data)?;
         Ok(id)
     }
@@ -692,7 +723,7 @@ impl Taskbook {
 
         let note = Note::new_with_tags(id, description, boards, tags);
         let mut data = self.get_data()?;
-        data.insert(id.to_string(), StorageItem::Note(note));
+        self.insert_new(&mut data, StorageItem::Note(note))?;
         self.save(&data)?;
         self.render.success_create(id, false);
         Ok(())
@@ -712,7 +743,7 @@ impl Taskbook {
                     note_content.body,
                     vec![DEFAULT_BOARD.to_string()],
                 );
-                data.insert(id.to_string(), StorageItem::Note(note));
+                self.insert_new(&mut data, StorageItem::Note(note))?;
                 self.save(&data)?;
                 self.render.success_create(id, false);
                 Ok(())
@@ -758,7 +789,7 @@ impl Taskbook {
             .ok_or_else(|| TaskbookError::General("Item is not a note".to_string()))?;
 
         // Open editor with current content
-        let content = editor::edit_existing_note_in_editor(note.title(), note.body())?;
+        let content = editor::edit_existing_note_in_editor(note.title(), note.body(), None)?;
 
         match content {
             Some(note_content) => {
@@ -796,7 +827,7 @@ impl Taskbook {
         let task =
             Task::new_with_tags(id, description, boards, priority, tags).with_due_date(due_date);
         let mut data = self.get_data()?;
-        data.insert(id.to_string(), StorageItem::Task(task));
+        self.insert_new(&mut data, StorageItem::Task(task))?;
         self.save(&data)?;
         self.render.success_create(id, true);
         Ok(())
@@ -1406,5 +1437,194 @@ impl Taskbook {
         }
 
         self.save(&data)
+    }
+}
+
+/// The smallest timestamp at or after `candidate` that no active or archived
+/// item already has. Stable IDs derive from the creation timestamp, so this is
+/// what keeps new items from sharing one.
+fn unique_timestamp(
+    candidate: i64,
+    active: &HashMap<String, StorageItem>,
+    archive: &HashMap<String, StorageItem>,
+) -> i64 {
+    let taken: HashSet<i64> = active
+        .values()
+        .chain(archive.values())
+        .map(|item| item.timestamp())
+        .filter(|&ts| ts >= candidate)
+        .collect();
+    let mut ts = candidate;
+    while taken.contains(&ts) {
+        ts += 1;
+    }
+    ts
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    fn test_taskbook() -> Taskbook {
+        let dir = std::env::temp_dir().join(format!("tb-taskbook-test-{}", uuid::Uuid::new_v4()));
+        Taskbook::with_storage(Box::new(LocalStorage::new(&dir).unwrap()))
+    }
+
+    fn task_at(id: u64, ts: i64) -> StorageItem {
+        let mut t = Task::new(id, format!("task {id}"), vec![DEFAULT_BOARD.to_string()], 1);
+        t.timestamp = ts;
+        StorageItem::Task(t)
+    }
+
+    fn map_of(items: Vec<StorageItem>) -> HashMap<String, StorageItem> {
+        items.into_iter().map(|i| (i.id().to_string(), i)).collect()
+    }
+
+    #[test]
+    fn unique_timestamp_keeps_a_free_candidate() {
+        let active = map_of(vec![task_at(1, 100)]);
+        let archive = HashMap::new();
+        assert_eq!(unique_timestamp(200, &active, &archive), 200);
+    }
+
+    #[test]
+    fn unique_timestamp_skips_archived_timestamps() {
+        let active = HashMap::new();
+        let archive = map_of(vec![task_at(1, 500)]);
+        assert_eq!(unique_timestamp(500, &active, &archive), 501);
+    }
+
+    #[test]
+    fn unique_timestamp_skips_runs_across_both_sets() {
+        let active = map_of(vec![task_at(1, 500), task_at(2, 501)]);
+        let archive = map_of(vec![task_at(1, 502)]);
+        assert_eq!(unique_timestamp(500, &active, &archive), 503);
+    }
+
+    /// Covers AE7 (creation half): rapid creates through every path get
+    /// distinct timestamps and therefore distinct stable IDs.
+    /// A store filled to the supported size, with every timestamp packed into
+    /// one run starting now: the worst case for keeping new creates unique.
+    fn envelope_taskbook() -> Taskbook {
+        use taskbook_common::limits::{SUPPORTED_ACTIVE_ITEMS, SUPPORTED_ARCHIVED_ITEMS};
+        let tb = test_taskbook();
+        let start = chrono::Utc::now().timestamp_millis();
+        let (active, archived) = (
+            SUPPORTED_ACTIVE_ITEMS as i64,
+            SUPPORTED_ARCHIVED_ITEMS as i64,
+        );
+        tb.save(&map_of(
+            (0..active)
+                .map(|i| task_at(i as u64 + 1, start + i))
+                .collect(),
+        ))
+        .unwrap();
+        tb.save_archive(&map_of(
+            (0..archived)
+                .map(|i| task_at(i as u64 + 1, start + active + i))
+                .collect(),
+        ))
+        .unwrap();
+        tb
+    }
+
+    #[test]
+    fn creates_stay_unique_at_the_supported_size() {
+        let tb = envelope_taskbook();
+        let board = vec![DEFAULT_BOARD.to_string()];
+        for i in 0..5 {
+            tb.create_task_direct_with_tags(board.clone(), format!("t{i}"), 1, vec![], None)
+                .unwrap();
+        }
+
+        let mut timestamps: Vec<i64> = tb
+            .get_data()
+            .unwrap()
+            .values()
+            .chain(tb.get_archive().unwrap().values())
+            .map(|item| item.timestamp())
+            .collect();
+        let total = timestamps.len();
+        timestamps.sort_unstable();
+        timestamps.dedup();
+        assert_eq!(timestamps.len(), total);
+    }
+
+    /// Loose latency budget at the supported size. Timing depends on the
+    /// machine, so it runs only on request: `cargo test -- --ignored`.
+    #[test]
+    #[ignore]
+    fn create_at_the_supported_size_is_fast() {
+        let tb = envelope_taskbook();
+        let board = vec![DEFAULT_BOARD.to_string()];
+        let started = std::time::Instant::now();
+        tb.create_task_direct_with_tags(board, "timed".into(), 1, vec![], None)
+            .unwrap();
+        let elapsed = started.elapsed();
+        assert!(elapsed.as_millis() < 500, "create took {elapsed:?}");
+    }
+
+    #[test]
+    fn rapid_creates_get_distinct_stable_ids() {
+        let tb = test_taskbook();
+        let board = vec![DEFAULT_BOARD.to_string()];
+        for i in 0..5 {
+            tb.create_task_direct_with_tags(board.clone(), format!("t{i}"), 1, vec![], None)
+                .unwrap();
+            tb.create_note_direct_with_tags(board.clone(), format!("n{i}"), vec![])
+                .unwrap();
+            tb.create_note_with_body_direct(board.clone(), format!("b{i}"), Some("body".into()))
+                .unwrap();
+            tb.create_task(&[format!("cli-task-{i}")]).unwrap();
+            tb.create_note(&[format!("cli-note-{i}")]).unwrap();
+        }
+
+        let data = tb.get_data().unwrap();
+        assert_eq!(data.len(), 25);
+        let timestamps: HashSet<i64> = data.values().map(|i| i.timestamp()).collect();
+        let stable_ids: HashSet<String> = data.values().map(|i| i.stable_id()).collect();
+        assert_eq!(timestamps.len(), 25);
+        assert_eq!(stable_ids.len(), 25);
+    }
+
+    #[test]
+    fn archive_and_restore_keep_timestamp_and_stable_id() {
+        let tb = test_taskbook();
+        let id = tb
+            .create_task_direct_with_tags(
+                vec![DEFAULT_BOARD.to_string()],
+                "x".into(),
+                1,
+                vec![],
+                None,
+            )
+            .unwrap();
+        // A second item so the restored one gets a different numeric ID.
+        tb.create_task_direct_with_tags(
+            vec![DEFAULT_BOARD.to_string()],
+            "y".into(),
+            1,
+            vec![],
+            None,
+        )
+        .unwrap();
+        let before = tb.get_data().unwrap()[&id.to_string()].clone();
+
+        tb.delete_items_silent(&[id]).unwrap();
+        let archived = tb.get_archive().unwrap();
+        let in_archive = archived.values().find(|i| i.description() == "x").unwrap();
+        assert_eq!(in_archive.stable_id(), before.stable_id());
+
+        tb.restore_items_silent(&[in_archive.id()]).unwrap();
+        let restored = tb
+            .get_data()
+            .unwrap()
+            .into_values()
+            .find(|i| i.description() == "x")
+            .unwrap();
+        assert_ne!(restored.id(), before.id());
+        assert_eq!(restored.timestamp(), before.timestamp());
+        assert_eq!(restored.stable_id(), before.stable_id());
     }
 }

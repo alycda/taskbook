@@ -120,6 +120,39 @@ mod tests {
         Taskbook::with_storage(Box::new(storage))
     }
 
+    /// A store holding `pending` open tasks and `done` completed ones.
+    fn seeded_taskbook(pending: u64, done: u64) -> Taskbook {
+        use crate::storage::StorageBackend;
+        use taskbook_common::{StorageItem, Task};
+        let dir = std::env::temp_dir().join(format!("tb-mcp-test-{}", uuid::Uuid::new_v4()));
+        let storage = LocalStorage::new(&dir).unwrap();
+        let items = (1..=pending + done)
+            .map(|id| {
+                let mut task = Task::new(id, format!("t{id}"), vec!["my board".into()], 1);
+                task.is_complete = id > pending;
+                (id.to_string(), StorageItem::Task(task))
+            })
+            .collect();
+        storage.set(&items).unwrap();
+        Taskbook::with_storage(Box::new(storage))
+    }
+
+    fn create_task_content(taskbook: &Taskbook) -> Vec<String> {
+        let resp = request(
+            taskbook,
+            json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+                "name":"create_task","arguments":{"description":"one more"}
+            }}),
+        );
+        assert_eq!(resp["result"]["isError"], false);
+        resp["result"]["content"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["text"].as_str().unwrap().to_string())
+            .collect()
+    }
+
     fn request(taskbook: &Taskbook, msg: Value) -> Value {
         let response = handle_message(taskbook, &msg.to_string()).expect("expected a response");
         serde_json::from_str(&response).unwrap()
@@ -243,6 +276,33 @@ mod tests {
         assert_eq!(item["priority"], 2);
         assert_eq!(item["tags"], json!(["money"]));
         assert_eq!(item["due_date"], "2026-07-01");
+    }
+
+    #[test]
+    fn create_within_the_recommendation_has_no_notice() {
+        let tb = seeded_taskbook(511, 0);
+        assert_eq!(create_task_content(&tb).len(), 1);
+    }
+
+    #[test]
+    fn create_past_the_recommendation_adds_a_notice() {
+        let tb = seeded_taskbook(512, 0);
+        let content = create_task_content(&tb);
+        assert_eq!(content.len(), 2, "{content:?}");
+        assert!(content[1].contains("513 active items, over the 512 recommended"));
+        assert!(content[1].contains("do not archive or delete items"));
+        assert!(!content[1].contains("tb --clear"), "nothing to clear");
+    }
+
+    #[test]
+    fn notice_suggests_clearing_only_completed_tasks() {
+        let tb = seeded_taskbook(500, 12);
+        let content = create_task_content(&tb);
+        assert!(
+            content[1].contains("12 of the active items are completed tasks"),
+            "{content:?}"
+        );
+        assert!(content[1].contains("tb --clear"));
     }
 
     #[test]

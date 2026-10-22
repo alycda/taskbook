@@ -50,6 +50,9 @@ crates/
 │       ├── board.rs        # Board name handling, normalization, CLI input parsing
 │       ├── due.rs          # Due-date parsing/formatting/status (epoch millis)
 │       ├── encryption.rs   # AES-256-GCM encrypt/decrypt
+│       ├── limits.rs       # Human-scale size envelope (recommended/supported)
+│       ├── links.rs        # [[stable-id]] link scanning, save-time rewrite, LinkIndex
+│       ├── stable_id.rs    # Stable item IDs derived from _timestamp (never stored)
 │       ├── error.rs        # CommonError type
 │       └── models/         # StorageItem, Task, Note, Item trait
 │
@@ -73,7 +76,7 @@ crates/
 │       │   ├── mod.rs      # StorageBackend trait
 │       │   ├── local.rs    # LocalStorage (file-based)
 │       │   └── remote.rs   # RemoteStorage (HTTP + encryption)
-│       └── tui/            # Interactive TUI (ratatui + crossterm)
+│       └── tui/            # Interactive TUI (ratatui + crossterm; widgets/link_pane.rs = backlinks pane)
 │
 └── taskbook-server/        # Server binary (tb-server)
     └── src/
@@ -117,7 +120,11 @@ crates/
    (honoring `$XDG_CONFIG_HOME`), falling back to the legacy
    `~/.taskbook.json` when it exists and the XDG file does not.
 
-6. **Storage Structure (Local)**:
+6. **Design Envelope (human scale)**: taskbook is a task board a person reads and keeps up with, as the original was; that purpose sets the bound, not storage performance. Recommended: under 512 active items. Supported, as headroom: 1,024 active and 4,096 archived (`taskbook-common/src/limits.rs`). Agent use via MCP is expected to stay within the same bounds. Past the recommendation (or the archive limit), `limits::SizeNotice` drives an informational notice in the TUI header and as an extra text block on MCP `create_task`/`create_note`/`restore_items` results; it never blocks, and suggests clearing only when completed tasks exist. Design features for what a person using the board can produce; scenarios only reachable at machine scale (thousands of active items, bulk writes within one millisecond, very large archives) are unsupported, not edge cases to handle. The JSON storage (whole-file read/rewrite per operation, full-set sync) fits this size, so O(n) work per operation is fine and indexes, caches or incremental storage are out of scope; measured numbers are in README "Limits". Envelope tests in `taskbook.rs` and `tui/widgets/item_row.rs` check correctness at the supported size; the timing check is `#[ignore]`d (`cargo test -- --ignored`).
+
+7. **Stable IDs and Links**: An item's numeric `_id` changes on archive/restore, so links use a stable ID instead: an invertible mix of `_timestamp` written as 16 letters `k`-`z` (`taskbook-common/src/stable_id.rs`). It is computed on read and never stored; create paths keep `_timestamp` unique, and golden test vectors freeze the mapping (changing it breaks every link). Two items created in the same millisecond on different devices share a stable ID (divergent, shown `??`); that tradeoff is acceptable within the design envelope. Links are `[[stable-id]]` tokens in item text, resolved only in the TUI.
+
+8. **Storage Structure (Local)**:
    ```
    ~/.taskbook/
    ├── storage/storage.json   # Active items

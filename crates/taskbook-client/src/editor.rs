@@ -90,12 +90,24 @@ pub fn create_note_in_editor() -> Result<Option<NoteContent>> {
     edit_in_external_editor(NEW_NOTE_TEMPLATE)
 }
 
-/// Open editor for editing an existing note
+/// Open editor for editing an existing note, optionally leading with a
+/// notice comment (for example why the previous save was rejected)
 pub fn edit_existing_note_in_editor(
     title: &str,
     body: Option<&str>,
+    notice: Option<&str>,
 ) -> Result<Option<NoteContent>> {
+    edit_in_external_editor(&existing_note_content(title, body, notice))
+}
+
+/// The editor buffer for an existing note
+fn existing_note_content(title: &str, body: Option<&str>, notice: Option<&str>) -> String {
     let mut content = String::new();
+    if let Some(notice) = notice {
+        content.push_str("// ");
+        content.push_str(notice);
+        content.push('\n');
+    }
     content.push_str(title);
     content.push('\n');
 
@@ -107,8 +119,7 @@ pub fn edit_existing_note_in_editor(
     content.push_str("\n\n");
     content.push_str("// Lines starting with // are comments and will be ignored.\n");
     content.push_str("// Delete all content (or leave only comments) to cancel.\n");
-
-    edit_in_external_editor(&content)
+    content
 }
 
 /// Parse editor content into title and body
@@ -174,6 +185,19 @@ fn parse_note_content(content: &str) -> Result<Option<NoteContent>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn existing_note_content_leads_with_the_notice() {
+        let content =
+            existing_note_content("Title", Some("body"), Some("Not saved: [[99]] not found"));
+        assert!(
+            content.starts_with("// Not saved: [[99]] not found\n"),
+            "{content}"
+        );
+        let parsed = parse_note_content(&content).unwrap().unwrap();
+        assert_eq!(parsed.title, "Title");
+        assert_eq!(parsed.body.as_deref(), Some("body"));
+    }
 
     #[test]
     fn test_parse_empty_content() {

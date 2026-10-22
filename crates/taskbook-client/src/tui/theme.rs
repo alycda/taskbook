@@ -21,6 +21,16 @@ pub struct TuiTheme {
     pub board_name: Style,
     pub tag: Style,
     pub board_tag: Style,
+    /// A resolved `[[link]]`: the target title
+    pub link: Style,
+    /// A link whose target is archived or missing
+    pub link_broken: Style,
+    /// A stable ID held by more than one item
+    pub link_divergent: Style,
+    /// The unique prefix of a stable ID
+    pub stable_id: Style,
+    /// The rest of a displayed stable ID
+    pub stable_id_rest: Style,
 }
 
 impl From<&ThemeColors> for TuiTheme {
@@ -76,6 +86,28 @@ impl From<&ThemeColors> for TuiTheme {
                 .add_modifier(Modifier::BOLD),
             // Board tags - soft purple
             board_tag: Style::default().fg(Color::Rgb(170, 130, 200)),
+            // Links carry a glyph or modifier too, so they survive NO_COLOR
+            link: Style::default()
+                .fg(Color::Rgb(colors.info.r, colors.info.g, colors.info.b))
+                .add_modifier(Modifier::UNDERLINED),
+            link_broken: Style::default().fg(Color::Rgb(
+                colors.error.r,
+                colors.error.g,
+                colors.error.b,
+            )),
+            link_divergent: Style::default().fg(Color::Rgb(
+                colors.warning.r,
+                colors.warning.g,
+                colors.warning.b,
+            )),
+            stable_id: Style::default()
+                .fg(Color::Rgb(colors.info.r, colors.info.g, colors.info.b))
+                .add_modifier(Modifier::BOLD),
+            stable_id_rest: Style::default().fg(Color::Rgb(
+                colors.muted.r,
+                colors.muted.g,
+                colors.muted.b,
+            )),
         }
     }
 }

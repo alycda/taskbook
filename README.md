@@ -63,6 +63,24 @@ Access commands directly from the TUI with `/` or Tab.
 
 ![Commands](screenshots/commands.png)
 
+### Links and Backlinks
+Link any task or note to another, Workflowy-style. Every item has a stable
+ID (shown after its number, e.g. `3 kqzx`) derived from when it was created;
+unlike the number, it never changes when items are archived or restored.
+
+- Type `[[` while writing a task, note or edit to pick a target from a list,
+  or type `[[12]]` (a number) or `[[kq]]` (a stable-ID prefix): it is saved
+  as a full `[[stable-id]]` token. A reference that matches nothing, or more
+  than one item, is not saved and your draft is kept.
+- Press `l` on an item to link it to another without editing text.
+- On terminals at least 100 columns wide, a side pane lists the selected
+  item's links and backlinks; `v` toggles it, `o` focuses it, Enter jumps.
+- Links to archived items show as broken (`✗`) until the item is restored.
+  Two items created in the same millisecond by older tools share an ID and
+  show `??`; they cannot be linked to.
+
+The CLI, MCP server and sync server show `[[stable-id]]` tokens as raw text.
+
 ### Help
 Full keyboard shortcut reference available with `?`.
 
@@ -161,6 +179,37 @@ See the [docs](docs/) folder for detailed documentation:
 ## Data Compatibility
 
 This implementation uses the same data format and directory (`~/.taskbook/`) as the original Node.js version, allowing seamless migration.
+
+## Limits
+
+taskbook is a task board for a person, like the original: something you read
+and keep up with yourself. We recommend staying under **512 active items**;
+more than that is hard for anyone to keep track of. The supported size,
+**1,024 active and 4,096 archived items**, is headroom above that
+recommendation, and it applies when agents use taskbook through MCP too.
+Larger stores are unsupported, and features are not designed for them.
+Past 512 active items (or 4,096 archived), the TUI header and MCP create
+results show a notice; it blocks nothing, and suggests `/clear` (`tb --clear`)
+only when there are completed tasks to archive. For
+example, two items created in the same millisecond on different devices can
+share a stable ID (shown as `??`), which a person using the board will not
+realistically hit.
+
+Storage is a JSON file that every command reads and rewrites in full, and
+sync uploads every item on each change, which is fast at this size.
+Measured on a 4-vCPU 2.8 GHz Xeon with a release build (median of 7 runs):
+
+| Active / archived | Files | Board view | Create |
+|---|---|---|---|
+| 256 / 4096 | 2.1 MB | 4 ms | 19 ms |
+| 512 / 4096 | 2.2 MB | 9 ms | 18 ms |
+| 1024 / 4096 | 2.4 MB | 9 ms | 20 ms |
+| 2048 / 8192 | 4.9 MB | 16 ms | 41 ms |
+
+Cost grows linearly with the number of stored items, about 4–5 ms per
+1,000 (active plus archived) per create on this machine. Sync mode transfers the whole store on every change, so its
+practical limit depends on your connection. To reproduce:
+`cargo build --release -p taskbook-client && python3 scripts/bench-envelope.py target/release/tb`.
 
 ## License
 

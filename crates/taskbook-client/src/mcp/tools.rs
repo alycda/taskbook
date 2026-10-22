@@ -3,6 +3,7 @@
 use serde_json::{json, Value};
 
 use crate::taskbook::Taskbook;
+use taskbook_common::limits::SizeNotice;
 use taskbook_common::{board, due, StorageItem};
 
 /// JSON Schema definitions for all exposed tools.
@@ -135,15 +136,44 @@ pub fn call(taskbook: &Taskbook, params: &Value) -> Result<Value, (i64, String)>
     };
 
     Ok(match outcome {
-        Ok(value) => json!({
-            "content": [{ "type": "text", "text": value.to_string() }],
-            "isError": false
-        }),
+        Ok(value) => {
+            let mut content = vec![json!({ "type": "text", "text": value.to_string() })];
+            // Tools that add active items say when the store is past the envelope.
+            if matches!(name, "create_task" | "create_note" | "restore_items") {
+                if let Some(notice) = size_notice(taskbook) {
+                    content.push(json!({ "type": "text", "text": notice }));
+                }
+            }
+            json!({ "content": content, "isError": false })
+        }
         Err(message) => json!({
             "content": [{ "type": "text", "text": message }],
             "isError": true
         }),
     })
+}
+
+/// A notice for the agent to pass on when the store is past the size taskbook
+/// is designed for. Read failures skip the notice rather than fail the call.
+fn size_notice(taskbook: &Taskbook) -> Option<String> {
+    let active = taskbook.get_all_items().ok()?;
+    let archived = taskbook.get_all_archive_items().ok()?.len();
+    let notice = SizeNotice::check(active.len(), archived)?;
+    let mut text = format!(
+        "Notice: {}. taskbook is a board meant for a person to keep up with.",
+        notice.summary()
+    );
+    let completed = active
+        .values()
+        .filter(|item| item.as_task().is_some_and(|task| task.is_complete))
+        .count();
+    if notice.active_over_recommended() && completed > 0 {
+        text.push_str(&format!(
+            " {completed} of the active items are completed tasks the user can archive with `tb --clear`."
+        ));
+    }
+    text.push_str(" Mention this to the user; do not archive or delete items on their behalf.");
+    Some(text)
 }
 
 fn item_to_json(item: &StorageItem) -> Value {

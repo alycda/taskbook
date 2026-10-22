@@ -6,7 +6,11 @@ use ratatui::{
 use crate::tui::app::App;
 use taskbook_common::board;
 use taskbook_common::due;
+use taskbook_common::links::Segment;
 use taskbook_common::StorageItem;
+
+/// Width of the stable-ID field shown after the numeric ID.
+const STABLE_ID_WIDTH: usize = 6;
 
 /// Options for rendering an item row
 pub struct ItemRowOptions {
@@ -39,12 +43,14 @@ pub fn render_item_line(
 ) -> Line<'static> {
     let mut spans: Vec<Span> = Vec::new();
 
-    // Selection indicator + Item ID
+    // Selection indicator + Item ID + stable ID
     if is_selected {
         spans.push(Span::styled(format!(" >{} ", item.id()), app.theme.info));
     } else {
         spans.push(Span::styled(format!("  {} ", item.id()), app.theme.item_id));
     }
+    spans.extend(stable_id_spans(app, item));
+    spans.push(Span::raw(" "));
 
     // Icon
     let (icon, icon_style) = if let Some(task) = item.as_task() {
@@ -75,7 +81,7 @@ pub fn render_item_line(
     } else {
         Style::default().fg(Color::Rgb(200, 200, 220))
     };
-    spans.push(Span::styled(desc, desc_style));
+    spans.extend(text_spans(app, &desc, desc_style));
 
     // Note body indicator
     if item.note_has_body() {
@@ -159,6 +165,75 @@ pub fn render_item_line(
     line
 }
 
+/// Spans for `text`, with `[[id]]` tokens rendered as link titles, broken
+/// markers (`✗` + short ID) or divergent markers (short ID + `??`).
+pub fn text_spans(app: &App, text: &str, base: Style) -> Vec<Span<'static>> {
+    app.links
+        .render(text)
+        .into_iter()
+        .map(|segment| match segment {
+            Segment::Text(t) => Span::styled(t, base),
+            Segment::Link { title, .. } => Span::styled(title, app.theme.link),
+            Segment::Broken { id } => Span::styled(broken_marker(app, &id), app.theme.link_broken),
+            Segment::Divergent { id } => {
+                Span::styled(divergent_marker(app, &id), app.theme.link_divergent)
+            }
+        })
+        .collect()
+}
+
+/// How a link to an archived or missing item reads: `✗` and its short ID.
+pub fn broken_marker(app: &App, id: &str) -> String {
+    format!("✗{}", app.links.short_id(id))
+}
+
+/// How a stable ID shared by more than one item reads: short ID and `??`.
+pub fn divergent_marker(app: &App, id: &str) -> String {
+    format!("{}??", app.links.short_id(id))
+}
+
+/// `text` as it renders, without styling (for matching and truncation).
+pub fn plain_text(app: &App, text: &str) -> String {
+    if !text.contains("[[") {
+        return text.to_string();
+    }
+    text_spans(app, text, Style::default())
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect()
+}
+
+/// The stable-ID field: the unique prefix highlighted, the rest of the first
+/// six letters dimmed, and `??` when the ID is divergent.
+pub fn stable_id_spans(app: &App, item: &StorageItem) -> Vec<Span<'static>> {
+    let id = item.stable_id();
+    let unique = app.links.prefix_len(&id).clamp(1, id.len());
+    let shown = unique.max(STABLE_ID_WIDTH).min(id.len());
+    let mut spans = vec![
+        Span::styled(id[..unique].to_string(), app.theme.stable_id),
+        Span::styled(id[unique..shown].to_string(), app.theme.stable_id_rest),
+    ];
+    if app.links.resolver().is_divergent(&id) {
+        spans.push(Span::styled("??", app.theme.link_divergent));
+    }
+    spans
+}
+
+/// First line of a note body as rendered text, cut to 50 characters.
+pub fn body_preview(app: &App, body: &str) -> String {
+    let Some(first_line) = body.lines().next() else {
+        return String::new();
+    };
+    let rendered = plain_text(app, first_line);
+    if rendered.chars().count() > 50 {
+        format!("  {}…", rendered.chars().take(50).collect::<String>())
+    } else if body.lines().count() > 1 {
+        format!("  {}…", rendered)
+    } else {
+        format!("  {}", rendered)
+    }
+}
+
 fn calculate_age(timestamp: i64) -> String {
     let now = chrono::Utc::now().timestamp_millis();
     let diff = now - timestamp;
@@ -174,5 +249,129 @@ fn calculate_age(timestamp: i64) -> String {
         format!("{}mo", days / 30)
     } else {
         format!("{}y", days / 365)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tui::app::tests::test_app;
+    use taskbook_common::links::LinkIndex;
+    use taskbook_common::{Note, Task};
+
+    fn line_text(line: &Line) -> String {
+        line.spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    fn task(id: u64, ts: i64, desc: &str) -> StorageItem {
+        let mut t = Task::new(id, desc.to_string(), vec!["my board".into()], 1);
+        t.timestamp = ts;
+        StorageItem::Task(t)
+    }
+
+    fn app_with(items: Vec<StorageItem>) -> crate::tui::app::App {
+        let (mut app, _) = test_app();
+        app.active_items = items.into_iter().map(|i| (i.id().to_string(), i)).collect();
+        app.links = LinkIndex::build(app.active_items.values());
+        app.items = app.active_items.clone();
+        app
+    }
+
+    #[test]
+    fn link_renders_as_underlined_title() {
+        let target_id = taskbook_common::stable_id::from_timestamp(2_000);
+        let app = app_with(vec![
+            task(1, 1_000, &format!("see [[{target_id}]]")),
+            task(2, 2_000, "Milk run"),
+        ]);
+        let line = render_item_line(
+            &app,
+            &app.items["1"],
+            false,
+            &ItemRowOptions::for_board_view(),
+        );
+        let text = line_text(&line);
+
+        assert!(text.contains("see Milk run"), "{text}");
+        assert!(!text.contains(&target_id), "{text}");
+        let link = line.spans.iter().find(|s| s.content == "Milk run").unwrap();
+        assert!(link.style.add_modifier.contains(Modifier::UNDERLINED));
+    }
+
+    #[test]
+    fn broken_and_divergent_links_carry_glyphs() {
+        let missing = taskbook_common::stable_id::from_timestamp(9_999);
+        let shared = taskbook_common::stable_id::from_timestamp(3_000);
+        let app = app_with(vec![
+            task(1, 1_000, &format!("a [[{missing}]] b [[{shared}]]")),
+            task(2, 3_000, "twin one"),
+            StorageItem::Note({
+                let mut n = Note::new(3, "twin two".into(), vec!["my board".into()]);
+                n.timestamp = 3_000;
+                n
+            }),
+        ]);
+        let text = line_text(&render_item_line(
+            &app,
+            &app.items["1"],
+            false,
+            &ItemRowOptions::for_board_view(),
+        ));
+        assert!(
+            text.contains(&format!("✗{}", app.links.short_id(&missing))),
+            "{text}"
+        );
+        assert!(
+            text.contains(&format!("{}??", app.links.short_id(&shared))),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn row_shows_a_six_character_stable_id_after_the_numeric_id() {
+        let app = app_with(vec![task(1, 1_000, "x")]);
+        let line = render_item_line(
+            &app,
+            &app.items["1"],
+            false,
+            &ItemRowOptions::for_board_view(),
+        );
+        let sid = taskbook_common::stable_id::from_timestamp(1_000);
+        assert!(
+            line_text(&line).starts_with(&format!("  1 {} ", &sid[..6])),
+            "{}",
+            line_text(&line)
+        );
+    }
+
+    #[test]
+    fn plain_rendering_and_preview_handle_multibyte_text() {
+        let app = app_with(vec![]);
+        let body = "ünïcödé ".repeat(10);
+        let preview = body_preview(&app, &body);
+        assert!(preview.chars().count() <= 53, "{preview}");
+        assert!(preview.ends_with('…'));
+    }
+
+    /// At the supported size, every active item's unique prefix fits the
+    /// stable-ID column, so rows stay aligned. Holds for these fixtures; past
+    /// the envelope a longer prefix widens the column instead.
+    #[test]
+    fn unique_prefixes_fit_the_column_at_the_supported_size() {
+        use taskbook_common::limits::SUPPORTED_ACTIVE_ITEMS;
+        let n = SUPPORTED_ACTIVE_ITEMS as i64;
+        // Consecutive milliseconds, and one item a minute.
+        for step in [1, 60_000] {
+            let items: Vec<StorageItem> = (0..n)
+                .map(|i| task(i as u64 + 1, 1_790_000_000_000 + i * step, "x"))
+                .collect();
+            let idx = LinkIndex::build(items.iter());
+            let widest = items
+                .iter()
+                .map(|item| idx.prefix_len(&item.stable_id()))
+                .max()
+                .unwrap();
+            assert!(widest <= STABLE_ID_WIDTH, "step {step}: prefix {widest}");
+        }
     }
 }
