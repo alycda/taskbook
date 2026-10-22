@@ -9,6 +9,7 @@ use crate::error::Result;
 use crate::render::Stats;
 use crate::taskbook::Taskbook;
 use taskbook_common::board;
+use taskbook_common::limits::SizeNotice;
 use taskbook_common::links::{self, LinkIndex, Target};
 use taskbook_common::StorageItem;
 
@@ -106,6 +107,9 @@ pub struct App {
     config_path: Option<PathBuf>,
     /// Link side pane state
     pub pane: PaneState,
+    /// Archived item count for the size notice. Read at startup and whenever
+    /// Archive view loads the archive, so it can lag deletes made since.
+    pub archived_count: usize,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -262,6 +266,7 @@ impl App {
                 focused: false,
                 cursor: 0,
             },
+            archived_count: 0,
             cached_stats: Stats {
                 percent: 0,
                 complete: 0,
@@ -272,6 +277,9 @@ impl App {
         };
 
         app.refresh_items()?;
+        if app.view != ViewMode::Archive {
+            app.archived_count = app.taskbook.get_all_archive_items()?.len();
+        }
 
         Ok(app)
     }
@@ -282,7 +290,9 @@ impl App {
         self.links = LinkIndex::build(self.active_items.values());
         self.boards = self.taskbook.boards_of(&self.active_items);
         self.items = if self.view == ViewMode::Archive {
-            self.taskbook.get_all_archive_items()?
+            let archive = self.taskbook.get_all_archive_items()?;
+            self.archived_count = archive.len();
+            archive
         } else {
             self.active_items.clone()
         };
@@ -295,6 +305,22 @@ impl App {
         }
 
         Ok(())
+    }
+
+    /// Header text when the store is past the size taskbook is designed for,
+    /// suggesting `/clear` only when there are completed tasks to archive.
+    pub fn size_notice(&self) -> Option<String> {
+        let notice = SizeNotice::check(self.active_items.len(), self.archived_count)?;
+        let completed = self
+            .active_items
+            .values()
+            .filter(|item| item.as_task().is_some_and(|task| task.is_complete))
+            .count();
+        let mut text = notice.summary();
+        if notice.active_over_recommended() && completed > 0 {
+            text.push_str(&format!(" · /clear archives {completed} done"));
+        }
+        Some(text)
     }
 
     /// Recalculate cached statistics
@@ -1095,5 +1121,87 @@ pub(crate) mod tests {
         let content = app.pane_content();
         assert!(content.divergent);
         assert!(content.backlinks.is_empty());
+    }
+
+    // ----- size notice -----
+
+    /// Put `pending` open and `done` completed tasks in the app's active set.
+    fn fill(app: &mut App, pending: u64, done: u64) {
+        for id in 1..=pending + done {
+            let mut task =
+                taskbook_common::Task::new(id, format!("t{id}"), vec!["my board".into()], 1);
+            task.is_complete = id > pending;
+            app.active_items
+                .insert(id.to_string(), StorageItem::Task(task));
+        }
+        app.items = app.active_items.clone();
+    }
+
+    #[test]
+    fn no_size_notice_within_the_recommendation() {
+        let (mut app, _) = test_app();
+        fill(&mut app, 512, 0);
+        assert_eq!(app.size_notice(), None);
+    }
+
+    #[test]
+    fn size_notice_suggests_clear_only_with_completed_tasks() {
+        let (mut app, _) = test_app();
+        fill(&mut app, 513, 0);
+        assert_eq!(
+            app.size_notice().as_deref(),
+            Some("513 active items, over the 512 recommended")
+        );
+
+        let (mut app, _) = test_app();
+        fill(&mut app, 500, 13);
+        assert_eq!(
+            app.size_notice().as_deref(),
+            Some("513 active items, over the 512 recommended · /clear archives 13 done")
+        );
+    }
+
+    #[test]
+    fn archive_only_notice_has_no_action() {
+        let (mut app, _) = test_app();
+        fill(&mut app, 10, 5);
+        app.archived_count = 5000;
+        assert_eq!(
+            app.size_notice().as_deref(),
+            Some("5000 archived items, over the 4096 supported")
+        );
+    }
+
+    #[test]
+    fn startup_counts_the_archive() {
+        let dir = std::env::temp_dir().join(format!("tb-app-test-{}", uuid::Uuid::new_v4()));
+        let taskbook = Taskbook::with_storage(Box::new(LocalStorage::new(&dir).unwrap()));
+        let id = taskbook
+            .create_task_direct_with_tags(vec!["my board".into()], "x".into(), 1, vec![], None)
+            .unwrap();
+        taskbook.delete_items_silent(&[id]).unwrap();
+
+        let app = App::with_taskbook(taskbook, Config::default(), dir.join("config.json")).unwrap();
+        assert_eq!(app.archived_count, 1);
+    }
+
+    #[test]
+    fn header_shows_the_size_notice() {
+        use ratatui::{backend::TestBackend, Terminal};
+        let (mut app, _) = test_app();
+        fill(&mut app, 513, 0);
+        app.update_display_order();
+        let mut terminal = Terminal::new(TestBackend::new(160, 10)).unwrap();
+        terminal
+            .draw(|f| crate::tui::ui::render(f, &mut app))
+            .unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let header: String = (0..buffer.area.width)
+            .map(|x| buffer[(x, 0)].symbol().to_string())
+            .collect();
+        assert!(
+            header.contains("[513 active items, over the 512 recommended]"),
+            "{header}"
+        );
     }
 }

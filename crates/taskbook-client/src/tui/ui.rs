@@ -89,6 +89,12 @@ fn render_header(frame: &mut Frame, app: &App, area: Rect) {
         spans.push(Span::styled("[Hiding completed]", app.theme.warning));
     }
 
+    // Store past the size taskbook is designed for (informational)
+    if let Some(notice) = app.size_notice() {
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled(format!("[{notice}]"), app.theme.warning));
+    }
+
     let header = Line::from(spans);
     let paragraph = Paragraph::new(header);
     frame.render_widget(paragraph, area);
