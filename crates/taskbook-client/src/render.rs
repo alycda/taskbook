@@ -164,7 +164,8 @@ impl Render {
     fn build_prefix(&self, item: &StorageItem) -> String {
         let id = item.id();
         let id_str = id.to_string();
-        let padding = " ".repeat(4 - id_str.len());
+        // Pad to four columns; longer IDs widen the column instead of underflowing.
+        let padding = " ".repeat(4usize.saturating_sub(id_str.len()));
         format!("{}{}", padding, self.muted(&format!("{}.", id)))
     }
 
@@ -618,5 +619,27 @@ impl Render {
                 self.muted(&id.to_string())
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use taskbook_common::Task;
+
+    fn prefix(id: u64) -> String {
+        let task = Task::new(id, "x".into(), vec!["my board".into()], 1);
+        Render::new(Config::default()).build_prefix(&StorageItem::Task(task))
+    }
+
+    #[test]
+    fn short_ids_are_padded_to_four_columns() {
+        assert!(prefix(7).starts_with("   "), "{:?}", prefix(7));
+    }
+
+    #[test]
+    fn ids_of_five_or_more_digits_do_not_panic() {
+        assert!(prefix(10_000).contains("10000."));
+        assert!(prefix(123_456).contains("123456."));
     }
 }
