@@ -16,10 +16,14 @@ Actions are subcommands instead of flags.
 | `tb --register --server URL` | `tb register --server URL` |
 | `tb --mcp` | `tb mcp` |
 
-The 1.x flags (`--task`/`-t`, `--check`/`-c`, ...) still work in 2.x: they
-are rewritten to the matching subcommand and print a deprecation warning on
-stderr. They will be removed in 3.0. Update scripts and your MCP
-registration:
+The 1.x flags (`--task`/`-t`, `--check`/`-c`, ...) still parse in 2.x:
+they are rewritten to the matching subcommand and print a deprecation
+warning on stderr. They will be removed in 3.0. The flag is the only thing
+translated, though: the arguments must already follow the 2.0 rules below.
+So `tb --edit @3 x` fails (ids lose the `@`), and `tb --task Fix p:3` now
+means *normal* priority (the scale is inverted). The shim prints an extra
+warning when a legacy invocation mentions a priority. Update scripts and
+your MCP registration:
 
 ```bash
 claude mcp remove taskbook
@@ -63,13 +67,17 @@ and to the MCP `priority` field (input and output). Labels work too:
 `p:high`, `tb priority 3 medium`.
 
 **Stored data.** 2.0 writes the new scale to a new `_priority` field and
-also keeps writing the old `priority` field with the 1.x value, so:
+keeps writing the old `priority` field with the 1.x value, so:
 
 - Existing 1.x data (and data from the Node.js taskbook) is read correctly;
   nothing to migrate.
-- A 1.x client sharing the same directory or sync server keeps reading
-  correct priorities from items 2.0 wrote. When 1.x saves an item it drops
-  `_priority`, and 2.0 falls back to the legacy field.
+- A 1.x or Node.js client sharing the same directory or sync server keeps
+  reading correct priorities from items 2.0 wrote.
+- While both fields are written, 2.x reads the legacy `priority` field
+  whenever it is present, because an older client may have changed it and
+  left `_priority` stale. `_priority` alone is read only when `priority` is
+  absent, which is the shape once 3.0 stops writing the legacy field. If you
+  edit the JSON by hand, change `priority` (or both).
 
 ## Stricter input
 

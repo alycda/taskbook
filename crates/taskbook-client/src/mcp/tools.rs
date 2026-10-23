@@ -185,16 +185,35 @@ fn arg_str<'a>(args: &'a Value, key: &str) -> Result<&'a str, String> {
         .ok_or_else(|| format!("missing or invalid '{key}'"))
 }
 
-fn opt_string_vec(args: &Value, key: &str) -> Vec<String> {
-    args.get(key)
-        .and_then(Value::as_array)
-        .map(|arr| {
-            arr.iter()
-                .filter_map(Value::as_str)
-                .map(str::to_string)
-                .collect()
-        })
-        .unwrap_or_default()
+/// An optional array of strings. A present value of any other shape is an
+/// error rather than being read as empty.
+fn opt_string_vec(args: &Value, key: &str) -> Result<Option<Vec<String>>, String> {
+    let invalid = || format!("'{key}' must be an array of strings");
+    match args.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Array(arr)) => arr
+            .iter()
+            .map(|v| v.as_str().map(str::to_string).ok_or_else(invalid))
+            .collect::<Result<Vec<_>, _>>()
+            .map(Some),
+        Some(_) => Err(invalid()),
+    }
+}
+
+fn opt_str<'a>(args: &'a Value, key: &str) -> Result<Option<&'a str>, String> {
+    match args.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(s)) => Ok(Some(s)),
+        Some(_) => Err(format!("'{key}' must be a string")),
+    }
+}
+
+fn opt_bool(args: &Value, key: &str) -> Result<Option<bool>, String> {
+    match args.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Bool(b)) => Ok(Some(*b)),
+        Some(_) => Err(format!("'{key}' must be a boolean")),
+    }
 }
 
 /// A non-empty array of ids. Any non-integer element is an error rather than
@@ -236,10 +255,7 @@ fn parse_priority_arg(args: &Value) -> Result<Option<Priority>, String> {
 }
 
 fn list_items(taskbook: &Taskbook, args: &Value) -> Result<Value, String> {
-    let archived = args
-        .get("archived")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
+    let archived = opt_bool(args, "archived")?.unwrap_or(false);
     let data = if archived {
         taskbook.archived_items()
     } else {
@@ -247,19 +263,16 @@ fn list_items(taskbook: &Taskbook, args: &Value) -> Result<Value, String> {
     }
     .map_err(|e| e.to_string())?;
 
-    let filter = args.get("filter").and_then(Value::as_str);
+    let filter = opt_str(args, "filter")?;
     if let Some(f) = filter {
         let valid = ["pending", "in_progress", "done", "task", "note", "starred"];
         if !valid.contains(&f) {
             return Err(format!("invalid filter '{f}' (use one of {valid:?})"));
         }
     }
-    let board_filter = args.get("board").and_then(Value::as_str);
-    let tag_filter = args.get("tag").and_then(Value::as_str);
-    let query = args
-        .get("query")
-        .and_then(Value::as_str)
-        .map(str::to_lowercase);
+    let board_filter = opt_str(args, "board")?;
+    let tag_filter = opt_str(args, "tag")?;
+    let query = opt_str(args, "query")?.map(str::to_lowercase);
 
     let mut items: Vec<&StorageItem> = data.values().collect();
     items.retain(|item| {
@@ -328,10 +341,10 @@ fn create_task(taskbook: &Taskbook, args: &Value) -> Result<Value, String> {
     let id = taskbook
         .create_task(NewTask {
             description: arg_str(args, "description")?.to_string(),
-            boards: opt_string_vec(args, "boards"),
+            boards: opt_string_vec(args, "boards")?.unwrap_or_default(),
             priority: parse_priority_arg(args)?.unwrap_or_default(),
-            tags: opt_string_vec(args, "tags"),
-            due_date: match args.get("due_date").and_then(Value::as_str) {
+            tags: opt_string_vec(args, "tags")?.unwrap_or_default(),
+            due_date: match opt_str(args, "due_date")? {
                 Some(raw) => parse_due_arg(raw)?,
                 None => None,
             },
@@ -344,9 +357,9 @@ fn create_note(taskbook: &Taskbook, args: &Value) -> Result<Value, String> {
     let id = taskbook
         .create_note(NewNote {
             title: arg_str(args, "description")?.to_string(),
-            boards: opt_string_vec(args, "boards"),
+            boards: opt_string_vec(args, "boards")?.unwrap_or_default(),
             body: None,
-            tags: opt_string_vec(args, "tags"),
+            tags: opt_string_vec(args, "tags")?.unwrap_or_default(),
         })
         .map_err(|e| e.to_string())?;
     Ok(json!({ "id": id, "type": "note" }))
@@ -368,19 +381,12 @@ fn set_task_state(taskbook: &Taskbook, args: &Value) -> Result<Value, String> {
 fn edit_item(taskbook: &Taskbook, args: &Value) -> Result<Value, String> {
     let id = arg_u64(args, "id")?;
     let edit = ItemEdit {
-        description: args
-            .get("description")
-            .and_then(Value::as_str)
-            .map(str::to_string),
+        description: opt_str(args, "description")?.map(str::to_string),
         priority: parse_priority_arg(args)?,
-        due_date: args
-            .get("due_date")
-            .and_then(Value::as_str)
-            .map(parse_due_arg)
-            .transpose()?,
-        boards: args.get("boards").map(|_| opt_string_vec(args, "boards")),
-        tags: args.get("tags").map(|_| opt_string_vec(args, "tags")),
-        starred: args.get("starred").and_then(Value::as_bool),
+        due_date: opt_str(args, "due_date")?.map(parse_due_arg).transpose()?,
+        boards: opt_string_vec(args, "boards")?,
+        tags: opt_string_vec(args, "tags")?,
+        starred: opt_bool(args, "starred")?,
     };
     let changed = edit.fields();
     if changed.is_empty() {

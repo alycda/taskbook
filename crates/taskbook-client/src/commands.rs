@@ -65,7 +65,10 @@ pub fn run(cli: Cli) -> Result<()> {
 
 fn run_item_command(tb: &Taskbook, render: &Render, command: Command) -> Result<()> {
     match command {
-        Command::Board => show_boards(render, &tb.items()?, None),
+        Command::Board => {
+            let data = tb.items()?;
+            show_boards(render, &data, None, Some(&data));
+        }
         Command::Timeline => {
             let data = tb.items()?;
             render.display_by_date(&group_by_date(&data));
@@ -187,13 +190,14 @@ fn run_item_command(tb: &Taskbook, render: &Render, command: Command) -> Result<
         Command::Find { terms } => {
             let mut data = tb.items()?;
             data.retain(|_, item| item_matches_terms(item, &terms));
-            show_boards(render, &data, None);
+            show_boards(render, &data, None, None);
         }
         Command::List { filters } => {
-            let mut data = tb.items()?;
-            let known_boards = Taskbook::boards_of(&data);
+            let all = tb.items()?;
+            let mut data = all.clone();
+            let known_boards = Taskbook::boards_of(&all);
             let boards = apply_list_filters(&mut data, &filters, &known_boards)?;
-            show_boards(render, &data, boards);
+            show_boards(render, &data, boards, Some(&all));
         }
         Command::Clear => {
             let ids = tb.clear_completed()?;
@@ -214,11 +218,13 @@ fn run_item_command(tb: &Taskbook, render: &Render, command: Command) -> Result<
 }
 
 /// Render `data` grouped by board (all of its boards, or just `only`), then
-/// the overall stats.
-fn show_boards(render: &Render, data: &Items, only: Option<Vec<String>>) {
+/// the progress stats of `stats_of` when given.
+fn show_boards(render: &Render, data: &Items, only: Option<Vec<String>>, stats_of: Option<&Items>) {
     let boards = only.unwrap_or_else(|| Taskbook::boards_of(data));
     render.display_by_board(&group_by_board(data, &boards));
-    render.display_stats(&Stats::from_items(data.values()));
+    if let Some(all) = stats_of {
+        render.display_stats(&Stats::from_items(all.values()));
+    }
 }
 
 fn parse_due_value(raw: &str) -> Result<Option<i64>> {
@@ -289,6 +295,11 @@ fn apply_list_filters(
     };
 
     let mut boards: Vec<String> = Vec::new();
+    let mut add_board = |b: String| {
+        if !boards.iter().any(|existing| board::board_eq(existing, &b)) {
+            boards.push(b);
+        }
+    };
     for term in filters {
         if let Some(tag) = term.strip_prefix('+').filter(|t| !t.is_empty()) {
             let tag = board::normalize_tag(tag);
@@ -297,11 +308,11 @@ fn apply_list_filters(
             let b = find_board(term).ok_or_else(|| {
                 TaskbookError::UnknownBoard(board::display_name(&board::normalize_board_name(term)))
             })?;
-            boards.push(b);
+            add_board(b);
         } else if let Some(pred) = list_attribute(&term.to_lowercase()) {
             data.retain(|_, item| pred(item));
         } else if let Some(b) = find_board(term) {
-            boards.push(b);
+            add_board(b);
         } else {
             return Err(TaskbookError::UnknownFilter(term.clone()));
         }
@@ -310,7 +321,6 @@ fn apply_list_filters(
     if boards.is_empty() {
         return Ok(None);
     }
-    boards.dedup_by(|a, b| board::board_eq(a, b));
     Ok(Some(boards))
 }
 

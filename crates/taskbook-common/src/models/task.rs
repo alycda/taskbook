@@ -26,10 +26,14 @@ pub struct Task {
 /// On-disk / on-wire shape of a [`Task`].
 ///
 /// Field names match the original Node.js taskbook. Priority is stored twice:
-/// `_priority` (1 = high … 3 = normal) is authoritative; the legacy
-/// `priority` field (1 = normal … 3 = high) is written for 1.x clients and
-/// read only when `_priority` is absent. A 1.x client re-saving an item drops
-/// `_priority` (it does not know the field), so the two never disagree.
+/// `_priority` (1 = high … 3 = normal) and the legacy `priority`
+/// (1 = normal … 3 = high). 2.x always writes both, consistently.
+///
+/// On read, the legacy field wins whenever it is present: writers that only
+/// know it may have changed it and left a stale `_priority` behind (the
+/// Node.js taskbook edits its JSON in place; taskbook-rs 1.x drops
+/// `_priority` instead). `_priority` alone is read when the legacy field is
+/// absent, which is the shape once 3.0 stops writing `priority`.
 #[derive(Serialize, Deserialize)]
 struct TaskRepr {
     #[serde(rename = "_id")]
@@ -61,9 +65,9 @@ struct TaskRepr {
 
 impl From<TaskRepr> for Task {
     fn from(r: TaskRepr) -> Self {
-        let priority = match (r.priority, r.legacy_priority) {
-            (Some(p), _) => Priority::from_stored(p),
-            (None, Some(legacy)) => Priority::from_legacy(legacy),
+        let priority = match (r.legacy_priority, r.priority) {
+            (Some(legacy), _) => Priority::from_legacy(legacy),
+            (None, Some(p)) => Priority::from_stored(p),
             (None, None) => Priority::default(),
         };
         Self {
@@ -220,9 +224,17 @@ mod tests {
     }
 
     #[test]
-    fn test_new_priority_field_wins_over_legacy() {
-        let both = LEGACY_HIGH.replace(r#""priority":3"#, r#""priority":3,"_priority":2"#);
+    fn test_legacy_field_wins_when_an_older_writer_changed_it() {
+        // 2.x wrote _priority:3/priority:1 (normal); Node then set priority:3.
+        let both = LEGACY_HIGH.replace(r#""priority":3"#, r#""priority":3,"_priority":3"#);
         let back: Task = serde_json::from_str(&both).unwrap();
+        assert_eq!(back.priority, Priority::High);
+    }
+
+    #[test]
+    fn test_new_field_alone_is_read() {
+        let new_only = LEGACY_HIGH.replace(r#""priority":3"#, r#""_priority":2"#);
+        let back: Task = serde_json::from_str(&new_only).unwrap();
         assert_eq!(back.priority, Priority::Medium);
     }
 

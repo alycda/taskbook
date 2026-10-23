@@ -106,7 +106,7 @@ crates/
 
 2. **Client-Side Encryption**: All data is encrypted with AES-256-GCM before being sent to the server. The 32-byte encryption key is generated on registration and never leaves the client. Each item is encrypted individually with a unique random nonce.
 
-3. **Backward Compatible JSON Format**: Uses `#[serde(rename = "...")]` to match the original Node.js field names (`_id`, `_date`, `_isTask`, `isStarred`, etc.) for seamless data migration. Priority is the exception: the authoritative field is `_priority` (1 = high, 2 = medium, 3 = normal); the legacy `priority` field (1 = normal … 3 = high) is still written for 1.x/Node.js readers and read only when `_priority` is absent (`Task` serializes through `TaskRepr` in `models/task.rs`).
+3. **Backward Compatible JSON Format**: Uses `#[serde(rename = "...")]` to match the original Node.js field names (`_id`, `_date`, `_isTask`, `isStarred`, etc.) for seamless data migration. Priority is the exception: 2.x writes both `_priority` (1 = high, 2 = medium, 3 = normal) and the legacy `priority` (1 = normal … 3 = high). On read the legacy field wins when present (older writers may have changed it in place and left `_priority` stale); `_priority` is read only when `priority` is absent, the shape once 3.0 stops writing it (`Task` serializes through `TaskRepr` in `models/task.rs`).
 
 4. **Atomic Writes**: Local storage operations write to a temp file first, then rename to prevent data corruption on crash.
 

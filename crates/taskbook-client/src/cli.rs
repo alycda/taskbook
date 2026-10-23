@@ -40,7 +40,7 @@ pub struct Cli {
     pub taskbook_dir: Option<PathBuf>,
 
     /// Print version
-    #[arg(short = 'v', long, action = ArgAction::Version)]
+    #[arg(short = 'v', short_alias = 'V', long, action = ArgAction::Version)]
     version: Option<bool>,
 
     #[command(subcommand)]
@@ -286,12 +286,18 @@ fn legacy_subcommand(arg: &str) -> Option<&'static str> {
 /// `tb --cli`) into subcommand form (`tb check 1`, `tb task @work x`,
 /// `tb board`).
 ///
-/// Returns the rewritten arguments plus, when a legacy flag was replaced, the
-/// `(flag, subcommand)` pair so the caller can print a deprecation notice.
-/// Arguments that already name a subcommand are returned unchanged.
-pub fn rewrite_legacy_args(
-    mut args: Vec<OsString>,
-) -> (Vec<OsString>, Option<(String, &'static str)>) {
+/// Returns the rewritten arguments plus, when a legacy flag was replaced or
+/// dropped, the `(flag, subcommand)` pair so the caller can print a
+/// deprecation notice. Arguments that already name a subcommand are left
+/// alone apart from a leading `--cli`.
+pub fn rewrite_legacy_args(mut args: Vec<OsString>) -> (Vec<OsString>, Option<(String, String)>) {
+    let is_subcommand = |arg: Option<&OsString>| {
+        let name = arg.and_then(|a| a.to_str()).unwrap_or("");
+        Cli::command()
+            .get_subcommands()
+            .any(|sub| sub.get_name() == name)
+    };
+
     // Skip leading global options; drop the 1.x `--cli` switch.
     let mut start = 1;
     let mut saw_cli = false;
@@ -307,22 +313,36 @@ pub fn rewrite_legacy_args(
             break;
         }
     }
+    let start = start.min(args.len());
 
-    let first = args.get(start).and_then(|a| a.to_str()).unwrap_or("");
-    let is_subcommand = Cli::command()
-        .get_subcommands()
-        .any(|sub| sub.get_name() == first);
-    if !is_subcommand {
-        let legacy = args[start.min(args.len())..]
+    if !is_subcommand(args.get(start)) {
+        // 1.x accepted flags in any order: drop `--cli` anywhere before `--`.
+        let end = args[start..]
             .iter()
-            .take_while(|a| *a != "--")
+            .position(|a| a == "--")
+            .map_or(args.len(), |i| start + i);
+        let before = args.len();
+        let mut i = start;
+        let mut end = end;
+        while i < end {
+            if args[i] == "--cli" {
+                args.remove(i);
+                end -= 1;
+            } else {
+                i += 1;
+            }
+        }
+        saw_cli |= args.len() != before;
+
+        let legacy = args[start..end]
+            .iter()
             .position(|a| a.to_str().and_then(legacy_subcommand).is_some());
         if let Some(offset) = legacy {
             let flag = args.remove(start + offset);
             let flag = flag.to_string_lossy().into_owned();
             let sub = legacy_subcommand(&flag).expect("matched above");
             args.insert(start, sub.into());
-            return (args, Some((flag, sub)));
+            return (args, Some((flag, sub.to_string())));
         }
     }
 
@@ -330,7 +350,8 @@ pub fn rewrite_legacy_args(
         if args.len() <= start {
             args.push("board".into());
         }
-        return (args, Some(("--cli".to_string(), "board")));
+        let sub = args[start].to_string_lossy().into_owned();
+        return (args, Some(("--cli".to_string(), sub)));
     }
     (args, None)
 }
@@ -411,6 +432,29 @@ mod tests {
             rewrite(&["tb", "--cli", "--list", "done"]).0,
             ["tb", "list", "done"]
         );
+    }
+
+    #[test]
+    fn test_rewrite_cli_flag_anywhere() {
+        assert_eq!(
+            rewrite(&["tb", "--list", "done", "--cli"]).0,
+            ["tb", "list", "done"]
+        );
+        assert_eq!(
+            rewrite(&["tb", "--cli", "check", "1"]),
+            (
+                vec!["tb".into(), "check".into(), "1".into()],
+                Some("--cli".into())
+            )
+        );
+    }
+
+    #[test]
+    fn test_short_version_aliases() {
+        for flag in ["-v", "-V", "--version"] {
+            let err = parse(&["tb", flag]).unwrap_err();
+            assert_eq!(err.kind(), clap::error::ErrorKind::DisplayVersion, "{flag}");
+        }
     }
 
     #[test]

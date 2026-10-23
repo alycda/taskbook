@@ -1,7 +1,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::editor;
-use crate::error::Result;
+use crate::error::{Result, TaskbookError};
 use crate::taskbook::{NewNote, NewTask};
 use taskbook_common::{board, Priority};
 
@@ -50,11 +50,11 @@ fn handle_confirm_key(app: &mut App, key: KeyEvent) -> Result<()> {
                 match action {
                     PendingAction::Delete { ids } => {
                         let result = delete_items(app, &ids);
-                        report(app, result);
+                        report(app, result)?;
                     }
                     PendingAction::Clear => {
                         let result = clear_completed(app);
-                        report(app, result);
+                        report(app, result)?;
                     }
                 }
             }
@@ -184,13 +184,16 @@ fn accept_suggestion(app: &mut App) {
 /// (unknown id, note given a priority, ...) go to the status bar instead of
 /// ending the TUI.
 fn execute_input(app: &mut App, input: &str) -> Result<()> {
-    let result = command_parser::parse_command(input)
-        .map_err(|e| e.message)
-        .and_then(|cmd| execute_command(app, cmd).map_err(|e| e.to_string()));
-    if let Err(message) = result {
-        app.set_status(message, StatusKind::Error);
+    match command_parser::parse_command(input) {
+        Ok(cmd) => {
+            let result = execute_command(app, cmd);
+            report(app, result)
+        }
+        Err(e) => {
+            app.set_status(e.message, StatusKind::Error);
+            Ok(())
+        }
     }
-    Ok(())
 }
 
 /// Explicit boards, else the filtered board, else the default board.
@@ -264,6 +267,7 @@ fn execute_command(app: &mut App, cmd: ParsedCommand) -> Result<()> {
             app.command_line.pending_confirm = Some(PendingAction::Delete { ids });
         }
         ParsedCommand::Search { term } => {
+            app.filter.id_filter = None;
             app.filter.search_term = Some(term.clone());
             app.update_display_order();
             app.selected_index = 0;
@@ -280,7 +284,7 @@ fn execute_command(app: &mut App, cmd: ParsedCommand) -> Result<()> {
                 .filter(|id| !app.items.contains_key(&id.to_string()))
                 .collect();
             if !unknown.is_empty() {
-                return Err(crate::error::TaskbookError::UnknownIds(unknown));
+                return Err(TaskbookError::UnknownIds(unknown));
             }
             app.clear_board_filter();
             app.filter.search_term = None;
@@ -403,7 +407,7 @@ fn handle_shortcut_key(app: &mut App, key: KeyEvent) -> Result<()> {
                 if !item.is_task() {
                     let id = item.id();
                     let result = edit_note_external(app, id);
-                    report(app, result);
+                    report(app, result)?;
                 } else if app.view == ViewMode::Board && app.filter.board_filter.is_none() {
                     if let Some(board_name) = app.get_board_for_selected() {
                         let display = board::display_name(&board_name);
@@ -493,31 +497,31 @@ fn handle_shortcut_key(app: &mut App, key: KeyEvent) -> Result<()> {
         KeyCode::Char('c') if app.view != ViewMode::Archive => {
             if let Some(id) = app.selected_id() {
                 let result = toggle_check(app, &[id]);
-                report(app, result);
+                report(app, result)?;
             }
         }
         KeyCode::Char('b') if app.view != ViewMode::Archive => {
             if let Some(id) = app.selected_id() {
                 let result = toggle_begin(app, &[id]);
-                report(app, result);
+                report(app, result)?;
             }
         }
         KeyCode::Char('s') if app.view != ViewMode::Archive => {
             if let Some(id) = app.selected_id() {
                 let result = toggle_star(app, &[id]);
-                report(app, result);
+                report(app, result)?;
             }
         }
         KeyCode::Char('r') if app.view == ViewMode::Archive => {
             if let Some(id) = app.selected_id() {
                 let result = restore_item(app, id);
-                report(app, result);
+                report(app, result)?;
             }
         }
         KeyCode::Char('y') => {
             if let Some(id) = app.selected_id() {
                 let result = copy_to_clipboard(app, id);
-                report(app, result);
+                report(app, result)?;
             }
         }
 
@@ -549,9 +553,16 @@ fn handle_shortcut_key(app: &mut App, key: KeyEvent) -> Result<()> {
 // Action implementations
 
 /// Show an operation error in the status bar instead of ending the TUI.
-fn report(app: &mut App, result: Result<()>) {
-    if let Err(e) = result {
-        app.set_status(e.to_string(), StatusKind::Error);
+/// Terminal failures (`TaskbookError::Tui`) still propagate: the TUI cannot
+/// keep running without a working terminal.
+pub fn report(app: &mut App, result: Result<()>) -> Result<()> {
+    match result {
+        Err(e @ TaskbookError::Tui(_)) => Err(e),
+        Err(e) => {
+            app.set_status(e.to_string(), StatusKind::Error);
+            Ok(())
+        }
+        Ok(()) => Ok(()),
     }
 }
 

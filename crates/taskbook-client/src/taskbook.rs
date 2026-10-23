@@ -288,7 +288,7 @@ impl Taskbook {
         &self,
         ids: &[u64],
         tasks_only: bool,
-        mut f: impl FnMut(&mut StorageItem),
+        mut f: impl FnMut(u64, &mut StorageItem),
     ) -> Result<Vec<u64>> {
         let mut data = self.items()?;
         let ids = if tasks_only {
@@ -297,22 +297,22 @@ impl Taskbook {
             resolve_ids(&data, ids)?
         };
         for id in &ids {
-            f(data.get_mut(&id.to_string()).expect("resolved"));
+            f(*id, data.get_mut(&id.to_string()).expect("resolved"));
         }
         self.storage.set(&data)?;
         Ok(ids)
     }
 
-    fn update_tasks(&self, ids: &[u64], mut f: impl FnMut(&mut Task)) -> Result<Vec<u64>> {
-        self.update_items(ids, true, |item| {
-            f(item.as_task_mut().expect("resolved as task"))
+    fn update_tasks(&self, ids: &[u64], mut f: impl FnMut(u64, &mut Task)) -> Result<Vec<u64>> {
+        self.update_items(ids, true, |id, item| {
+            f(id, item.as_task_mut().expect("resolved as task"))
         })
     }
 
     /// Toggle tasks between done and pending. Clears in-progress.
     pub fn toggle_check(&self, ids: &[u64]) -> Result<Toggled> {
         let mut out = Toggled::default();
-        self.update_tasks(ids, |task| {
+        self.update_tasks(ids, |id, task| {
             task.in_progress = false;
             task.is_complete = !task.is_complete;
             let bucket = if task.is_complete {
@@ -320,7 +320,7 @@ impl Taskbook {
             } else {
                 &mut out.off
             };
-            bucket.push(task.id);
+            bucket.push(id);
         })?;
         Ok(out)
     }
@@ -328,7 +328,7 @@ impl Taskbook {
     /// Toggle tasks between in-progress and pending. Clears done.
     pub fn toggle_begin(&self, ids: &[u64]) -> Result<Toggled> {
         let mut out = Toggled::default();
-        self.update_tasks(ids, |task| {
+        self.update_tasks(ids, |id, task| {
             task.is_complete = false;
             task.in_progress = !task.in_progress;
             let bucket = if task.in_progress {
@@ -336,24 +336,24 @@ impl Taskbook {
             } else {
                 &mut out.off
             };
-            bucket.push(task.id);
+            bucket.push(id);
         })?;
         Ok(out)
     }
 
     pub fn toggle_star(&self, ids: &[u64]) -> Result<Toggled> {
         let mut out = Toggled::default();
-        self.update_items(ids, false, |item| {
+        self.update_items(ids, false, |id, item| {
             let starred = !item.is_starred();
             item.set_starred(starred);
             let bucket = if starred { &mut out.on } else { &mut out.off };
-            bucket.push(item.id());
+            bucket.push(id);
         })?;
         Ok(out)
     }
 
     pub fn set_task_state(&self, id: u64, state: TaskState) -> Result<()> {
-        self.update_tasks(&[id], |task| {
+        self.update_tasks(&[id], |_, task| {
             task.is_complete = state == TaskState::Done;
             task.in_progress = state == TaskState::InProgress;
         })?;
@@ -361,11 +361,11 @@ impl Taskbook {
     }
 
     pub fn set_priority(&self, ids: &[u64], priority: Priority) -> Result<Vec<u64>> {
-        self.update_tasks(ids, |task| task.priority = priority)
+        self.update_tasks(ids, |_, task| task.priority = priority)
     }
 
     pub fn set_due_date(&self, ids: &[u64], due_date: Option<i64>) -> Result<Vec<u64>> {
-        self.update_tasks(ids, |task| task.due_date = due_date)
+        self.update_tasks(ids, |_, task| task.due_date = due_date)
     }
 
     /// Put items on exactly `boards`. Returns the normalized board names.
@@ -374,7 +374,7 @@ impl Taskbook {
             return Err(TaskbookError::MissingBoard);
         }
         let boards = normalize_boards(boards);
-        self.update_items(ids, false, |item| item.set_boards(boards.clone()))?;
+        self.update_items(ids, false, |_, item| item.set_boards(boards.clone()))?;
         Ok(boards)
     }
 
@@ -390,7 +390,7 @@ impl Taskbook {
         if add.is_empty() && remove.is_empty() {
             return Err(TaskbookError::MissingTags);
         }
-        self.update_items(ids, false, |item| {
+        self.update_items(ids, false, |_, item| {
             let mut tags: Vec<String> = item.tags().to_vec();
             tags.retain(|t| !remove.iter().any(|r| t.eq_ignore_ascii_case(r)));
             for tag in &add {
@@ -422,7 +422,7 @@ impl Taskbook {
         let tags = tags.map(normalize_tags);
 
         let tasks_only = priority.is_some() || due_date.is_some();
-        self.update_items(&[id], tasks_only, |item| {
+        self.update_items(&[id], tasks_only, |_, item| {
             if let Some(d) = &description {
                 item.set_description(d.clone());
             }
@@ -547,7 +547,8 @@ impl Taskbook {
                         }
                     })
                     .collect();
-                item.set_boards(boards);
+                // Dedupes when the item was already on the new board.
+                item.set_boards(normalize_boards(boards));
                 count += 1;
             }
         }

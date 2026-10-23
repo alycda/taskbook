@@ -435,4 +435,35 @@ mod tests {
         );
         assert_eq!(resp["result"]["isError"], true);
     }
+
+    #[test]
+    fn wrongly_typed_arguments_are_errors_not_empty_values() {
+        let tb = test_taskbook();
+        request(
+            &tb,
+            json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+                "name":"create_task","arguments":{"description":"A","tags":["keep"]}
+            }}),
+        );
+        for args in [
+            json!({"id":1,"tags":"urgent"}),
+            json!({"id":1,"starred":"yes"}),
+            json!({"id":1,"boards":["ok", 3]}),
+        ] {
+            let resp = request(
+                &tb,
+                json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{
+                    "name":"edit_item","arguments":args
+                }}),
+            );
+            assert_eq!(resp["result"]["isError"], true, "{args}");
+        }
+        let resp = request(
+            &tb,
+            json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{
+                "name":"list_items","arguments":{}
+            }}),
+        );
+        assert_eq!(tool_payload(&resp)[0]["tags"], json!(["keep"]));
+    }
 }

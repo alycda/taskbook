@@ -32,10 +32,22 @@ impl fmt::Display for IdError {
 
 impl std::error::Error for IdError {}
 
+/// All ASCII digits. Stricter than `u64::from_str`, which accepts `+2`
+/// (and `+2` is a tag).
+fn is_digits(token: &str) -> bool {
+    !token.is_empty() && token.bytes().all(|b| b.is_ascii_digit())
+}
+
 fn is_at_id(token: &str) -> bool {
-    token
-        .strip_prefix('@')
-        .is_some_and(|rest| !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()))
+    token.strip_prefix('@').is_some_and(is_digits)
+}
+
+fn as_id(token: &str) -> Option<u64> {
+    if is_digits(token) {
+        token.parse().ok()
+    } else {
+        None
+    }
 }
 
 /// Parse a single id token.
@@ -43,9 +55,7 @@ pub fn parse_id(token: &str) -> Result<u64, IdError> {
     if is_at_id(token) {
         return Err(IdError::AtPrefixed(token.to_string()));
     }
-    token
-        .parse::<u64>()
-        .map_err(|_| IdError::Invalid(token.to_string()))
+    as_id(token).ok_or_else(|| IdError::Invalid(token.to_string()))
 }
 
 /// Parse a list where every token must be an id. Fails on an empty list.
@@ -64,7 +74,7 @@ pub fn parse_ids<S: AsRef<str>>(tokens: &[S]) -> Result<Vec<u64>, IdError> {
 pub fn split_leading_ids<S: AsRef<str>>(tokens: &[S]) -> Result<(Vec<u64>, &[S]), IdError> {
     let count = tokens
         .iter()
-        .take_while(|t| t.as_ref().parse::<u64>().is_ok())
+        .take_while(|t| as_id(t.as_ref()).is_some())
         .count();
     if count == 0 {
         return Err(match tokens.first() {
@@ -75,7 +85,7 @@ pub fn split_leading_ids<S: AsRef<str>>(tokens: &[S]) -> Result<(Vec<u64>, &[S])
     }
     let ids = tokens[..count]
         .iter()
-        .map(|t| t.as_ref().parse::<u64>().expect("checked above"))
+        .map(|t| as_id(t.as_ref()).expect("checked above"))
         .collect();
     Ok((ids, &tokens[count..]))
 }
@@ -101,6 +111,7 @@ mod tests {
         assert_eq!(parse_id("foo"), Err(IdError::Invalid("foo".into())));
         assert_eq!(parse_id("@foo"), Err(IdError::Invalid("@foo".into())));
         assert_eq!(parse_id("-1"), Err(IdError::Invalid("-1".into())));
+        assert_eq!(parse_id("+2"), Err(IdError::Invalid("+2".into())));
     }
 
     #[test]
@@ -116,6 +127,14 @@ mod tests {
         let (ids, rest) = split_leading_ids(&tokens).unwrap();
         assert_eq!(ids, vec![1, 2]);
         assert_eq!(rest, &["@work", "3"]);
+    }
+
+    #[test]
+    fn test_split_leading_ids_stops_at_plus_tags() {
+        let tokens = ["1", "+2", "+work"];
+        let (ids, rest) = split_leading_ids(&tokens).unwrap();
+        assert_eq!(ids, vec![1]);
+        assert_eq!(rest, &["+2", "+work"]);
     }
 
     #[test]

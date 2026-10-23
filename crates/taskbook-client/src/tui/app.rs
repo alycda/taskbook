@@ -371,6 +371,7 @@ impl App {
 
     /// Set board filter
     pub fn set_board_filter(&mut self, board: Option<String>) {
+        self.filter.id_filter = None;
         self.filter.board_filter = board;
         self.selected_index = 0;
         self.update_display_order();

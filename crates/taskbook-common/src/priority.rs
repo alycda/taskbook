@@ -6,8 +6,8 @@
 //!
 //! Taskbook 1.x and the original Node.js taskbook stored the inverse scale
 //! in the `priority` field (1 = normal … 3 = high). Tasks still write that
-//! legacy field alongside `_priority` so 1.x clients sharing the same data
-//! read the right value, and it is read back when `_priority` is absent.
+//! legacy field alongside `_priority` so older clients sharing the same data
+//! read the right value; see `models/task.rs` for which field is read.
 
 use std::fmt;
 use std::str::FromStr;
@@ -43,9 +43,9 @@ impl Priority {
         }
     }
 
-    /// Decode a stored `_priority` value, clamping out-of-range values.
+    /// Decode a stored `_priority` value; anything out of range is Normal.
     pub(crate) fn from_stored(level: u8) -> Self {
-        Self::from_level(level.clamp(1, 3)).unwrap_or_default()
+        Self::from_level(level).unwrap_or_default()
     }
 
     /// Decode the legacy (1.x / Node.js) `priority` field, where larger is
@@ -154,8 +154,8 @@ mod tests {
     }
 
     #[test]
-    fn test_from_stored_clamps() {
-        assert_eq!(Priority::from_stored(0), Priority::High);
+    fn test_from_stored_out_of_range_is_normal() {
+        assert_eq!(Priority::from_stored(0), Priority::Normal);
         assert_eq!(Priority::from_stored(9), Priority::Normal);
     }
 
