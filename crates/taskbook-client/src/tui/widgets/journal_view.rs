@@ -44,22 +44,7 @@ pub fn render_journal_view(frame: &mut Frame, app: &App, area: Rect) {
         // Filter items for display
         let visible_items: Vec<&StorageItem> = date_items
             .iter()
-            .filter(|item| {
-                if app.filter.hide_completed {
-                    if let Some(task) = item.as_task() {
-                        if task.is_complete {
-                            return false;
-                        }
-                    }
-                }
-                if let Some(ref term) = app.filter.search_term {
-                    let term_lower = term.to_lowercase();
-                    if !item.description().to_lowercase().contains(&term_lower) {
-                        return false;
-                    }
-                }
-                true
-            })
+            .filter(|item| app.should_show_item(item))
             .copied()
             .collect();
 

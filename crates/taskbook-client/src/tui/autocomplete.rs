@@ -9,6 +9,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("move", "Move item to board"),
     ("delete", "Delete items"),
     ("search", "Search/filter items"),
+    ("show", "Show only the given item ids"),
     ("priority", "Set task priority"),
     ("check", "Toggle task check"),
     ("star", "Toggle star"),
@@ -28,7 +29,7 @@ const COMMANDS: &[(&str, &str)] = &[
 
 /// Commands that accept item ids
 const ITEM_COMMANDS: &[&str] = &[
-    "check", "star", "begin", "delete", "edit", "move", "priority", "tag",
+    "check", "star", "begin", "delete", "edit", "move", "priority", "tag", "show",
 ];
 
 const MAX_SUGGESTIONS: usize = 8;

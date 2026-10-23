@@ -33,6 +33,9 @@ pub enum ParsedCommand {
     Search {
         term: String,
     },
+    Show {
+        ids: Vec<u64>,
+    },
     Priority {
         id: u64,
         level: Priority,
@@ -120,6 +123,7 @@ pub fn parse_command(input: &str) -> Result<ParsedCommand, ParseError> {
                 Ok(ParsedCommand::Search { term })
             }
         }
+        "show" => parse_id_list(args).map(|ids| ParsedCommand::Show { ids }),
         "priority" => parse_priority(args),
         "check" => parse_id_list(args).map(|ids| ParsedCommand::Check { ids }),
         "star" => parse_id_list(args).map(|ids| ParsedCommand::Star { ids }),
@@ -548,6 +552,16 @@ mod tests {
             }
             _ => panic!("Expected Task"),
         }
+    }
+
+    #[test]
+    fn test_parse_show() {
+        assert!(matches!(
+            parse_command("/show 3 4").unwrap(),
+            ParsedCommand::Show { ids } if ids == [3, 4]
+        ));
+        assert!(parse_command("/show").is_err());
+        assert!(parse_command("/show @3").is_err());
     }
 
     #[test]

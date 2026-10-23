@@ -157,6 +157,8 @@ pub struct FilterState {
     #[allow(dead_code)]
     pub attributes: Vec<String>,
     pub search_term: Option<String>,
+    /// Show only these item ids (`/show`). Overrides the other filters.
+    pub id_filter: Option<Vec<u64>>,
     /// Filter to show only items from this board
     pub board_filter: Option<String>,
     /// Hide completed tasks
@@ -246,6 +248,9 @@ impl App {
 
     /// Check if an item should be shown based on current filters
     pub fn should_show_item(&self, item: &StorageItem) -> bool {
+        if let Some(ref ids) = self.filter.id_filter {
+            return ids.contains(&item.id());
+        }
         if self.filter.hide_completed {
             if let Some(task) = item.as_task() {
                 if task.is_complete {
@@ -324,31 +329,7 @@ impl App {
                 let mut items: Vec<_> = self
                     .items
                     .values()
-                    .filter(|item| {
-                        if self.filter.hide_completed {
-                            if let Some(task) = item.as_task() {
-                                if task.is_complete {
-                                    return false;
-                                }
-                            }
-                        }
-                        if let Some(ref term) = self.filter.search_term {
-                            let term_lower = term.to_lowercase();
-                            let in_desc = item.description().to_lowercase().contains(&term_lower);
-                            let in_body = item
-                                .note_body()
-                                .map(|b| b.to_lowercase().contains(&term_lower))
-                                .unwrap_or(false);
-                            let in_tags = item
-                                .tags()
-                                .iter()
-                                .any(|t| t.to_lowercase().contains(&term_lower));
-                            if !in_desc && !in_body && !in_tags {
-                                return false;
-                            }
-                        }
-                        true
-                    })
+                    .filter(|item| self.should_show_item(item))
                     .collect();
                 items.sort_by(|a, b| {
                     b.timestamp()
@@ -480,6 +461,8 @@ impl App {
         if self.view != view {
             self.view = view;
             self.selected_index = 0;
+            // Ids are per view (archive ids differ), so an id filter can't carry over.
+            self.filter.id_filter = None;
 
             // Persist the view choice
             self.config.default_view = view;

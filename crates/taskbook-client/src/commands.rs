@@ -72,6 +72,12 @@ fn run_item_command(tb: &Taskbook, render: &Render, command: Command) -> Result<
             render.display_stats(&Stats::from_items(data.values()));
         }
         Command::Archive => render.display_by_date(&group_by_date(&tb.archived_items()?)),
+        Command::Show { ids, archived } => {
+            for item in tb.get(&ids, archived)? {
+                render.display_details(&item);
+            }
+            println!();
+        }
         Command::Task { input } => {
             let parsed = board::parse_cli_input(&input)?;
             let id = tb.create_task(NewTask {

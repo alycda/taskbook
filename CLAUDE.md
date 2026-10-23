@@ -144,6 +144,7 @@ deprecation warning (removal planned for 3.0).
 # Task management
 tb                          # Interactive board (TUI)
 tb board                    # Print board view (non-interactive)
+tb show <id>... [--archived] # Print every field of items (TUI: /show <id>... filters the view)
 tb task Description         # Create task
 tb task @board Desc         # Create task in specific board
 tb task Desc p:1            # Create with priority (1=high, 2=medium, 3=normal)

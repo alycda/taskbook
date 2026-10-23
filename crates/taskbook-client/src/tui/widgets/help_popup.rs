@@ -160,6 +160,10 @@ pub fn render_help_popup(frame: &mut Frame, app: &App, scroll: u16) {
             Span::styled("<term>", desc_style),
         ]),
         Line::from(vec![
+            Span::styled("    /show        ", cmd_style),
+            Span::styled("<id> [id...]  only these items (Esc clears)", desc_style),
+        ]),
+        Line::from(vec![
             Span::styled("    /tag         ", cmd_style),
             Span::styled("<id> +add -remove", desc_style),
         ]),

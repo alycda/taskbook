@@ -47,6 +47,25 @@ tb archive
 Prints archived (deleted) items. The ids shown here are archive ids, used by
 `tb restore`.
 
+### Show Items
+
+```bash
+tb show <ID>... [--archived]
+```
+
+Prints every field of the given items: state, priority, due date, boards,
+tags, star, creation date, and the full body of notes. `--archived` looks up
+archive ids (as shown by `tb archive`).
+
+```bash
+tb show 3
+tb show 3 4
+tb show --archived 1
+```
+
+In the TUI, `/show <id>...` narrows the current view to those items; Esc
+clears it.
+
 ## Creating Items
 
 ### Create Task

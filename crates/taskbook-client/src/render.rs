@@ -371,6 +371,63 @@ impl Render {
         }
     }
 
+    /// Print every field of one item (`tb show`).
+    pub fn display_details(&self, item: &StorageItem) {
+        println!(
+            "\n{} {} {}",
+            self.build_prefix(item),
+            self.get_item_icon(item),
+            self.build_message(item)
+        );
+
+        let row = |label: &str, value: String| {
+            println!("        {} {}", self.muted(&format!("{label:<9}")), value);
+        };
+
+        match item.as_task() {
+            Some(task) => {
+                let state = if task.is_complete {
+                    "done"
+                } else if task.in_progress {
+                    "in progress"
+                } else {
+                    "pending"
+                };
+                row("type", format!("task · {state}"));
+                row("priority", task.priority.to_string());
+                if let Some(millis) = task.due_date {
+                    let status = match due::due_status(millis) {
+                        due::DueStatus::Overdue => " (overdue)",
+                        due::DueStatus::DueToday => " (today)",
+                        due::DueStatus::Upcoming => "",
+                    };
+                    row("due", format!("{}{status}", due::format_due_date(millis)));
+                }
+            }
+            None => row("type", "note".to_string()),
+        }
+        let boards: Vec<String> = item
+            .boards()
+            .iter()
+            .map(|b| board::display_name(b))
+            .collect();
+        row("boards", boards.join(", "));
+        if !item.tags().is_empty() {
+            row("tags", self.color_tags(item.tags()));
+        }
+        if item.is_starred() {
+            row("starred", self.starred("★").to_string());
+        }
+        row("created", item.date().to_string());
+
+        if let Some(body) = item.note_body() {
+            println!();
+            for line in body.lines() {
+                println!("        {line}");
+            }
+        }
+    }
+
     pub fn display_stats(&self, stats: &Stats) {
         if !self.config.display_progress_overview {
             return;

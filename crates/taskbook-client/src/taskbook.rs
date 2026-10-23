@@ -223,6 +223,18 @@ impl Taskbook {
         self.storage.get_archive()
     }
 
+    /// The items with these ids (deduped, in the given order), from the
+    /// archive when `archived` is set.
+    pub fn get(&self, ids: &[u64], archived: bool) -> Result<Vec<StorageItem>> {
+        let data = if archived {
+            self.archived_items()?
+        } else {
+            self.items()?
+        };
+        let ids = resolve_ids(&data, ids)?;
+        Ok(ids.iter().map(|id| data[&id.to_string()].clone()).collect())
+    }
+
     pub fn boards(&self) -> Result<Vec<String>> {
         Ok(Self::boards_of(&self.items()?))
     }
@@ -708,6 +720,20 @@ mod tests {
         tb.toggle_check(&[b]).unwrap();
         assert_eq!(tb.clear_completed().unwrap(), vec![b]);
         assert!(tb.clear_completed().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_get_returns_requested_items_in_order() {
+        let tb = taskbook();
+        let a = task(&tb, "a");
+        let b = note(&tb, "b");
+        let items = tb.get(&[b, a, b], false).unwrap();
+        let ids: Vec<u64> = items.iter().map(StorageItem::id).collect();
+        assert_eq!(ids, vec![b, a]);
+        assert!(matches!(
+            tb.get(&[a], true).unwrap_err(),
+            TaskbookError::UnknownIds(_)
+        ));
     }
 
     #[test]

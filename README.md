@@ -78,6 +78,7 @@ Browse and restore deleted items.
 ```bash
 tb                              # Interactive board (TUI)
 tb board                        # Print the board view
+tb show <id>...                 # Print every field of items (incl. note bodies)
 tb task Description             # Create task
 tb task @board Desc             # Create task in a specific board
 tb task Desc p:1                # Create with priority (1=high, 2=medium, 3=normal)

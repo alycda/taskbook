@@ -15,6 +15,7 @@ Running tb with no command opens the interactive board.
 Examples:
   tb task @coding +urgent Review PR #42 p:1 due:tomorrow+0930
   tb note @coding Mergesort worst case is O(n log n)
+  tb show 3
   tb check 1 2
   tb priority 3 4 p1
   tb move 3 @reviews
@@ -56,6 +57,15 @@ pub enum Command {
 
     /// Show archived (deleted) items
     Archive,
+
+    /// Show every field of the given items, including note bodies
+    Show {
+        #[arg(required = true, value_parser = parse_id_arg, value_name = "ID")]
+        ids: Vec<u64>,
+        /// Look up archive ids (as shown by `tb archive`)
+        #[arg(long)]
+        archived: bool,
+    },
 
     /// Create a task
     #[command(
@@ -427,6 +437,15 @@ mod tests {
         assert!(
             matches!(cli.command, Some(Command::Task { ref input }) if input == &["fix", "-v", "flag"])
         );
+    }
+
+    #[test]
+    fn test_show_parses_ids_and_archive_flag() {
+        let cli = parse(&["tb", "show", "3", "4", "--archived"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::Show { ref ids, archived: true }) if ids == &[3, 4]
+        ));
     }
 
     #[test]

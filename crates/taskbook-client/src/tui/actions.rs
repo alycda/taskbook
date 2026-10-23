@@ -273,6 +273,21 @@ fn execute_command(app: &mut App, cmd: ParsedCommand) -> Result<()> {
                 StatusKind::Info,
             );
         }
+        ParsedCommand::Show { ids } => {
+            let unknown: Vec<u64> = ids
+                .iter()
+                .copied()
+                .filter(|id| !app.items.contains_key(&id.to_string()))
+                .collect();
+            if !unknown.is_empty() {
+                return Err(crate::error::TaskbookError::UnknownIds(unknown));
+            }
+            app.clear_board_filter();
+            app.filter.search_term = None;
+            app.filter.id_filter = Some(ids);
+            app.update_display_order();
+            app.selected_index = 0;
+        }
         ParsedCommand::Priority { id, level } => {
             set_priority(app, id, level)?;
         }
@@ -352,7 +367,12 @@ fn handle_shortcut_key(app: &mut App, key: KeyEvent) -> Result<()> {
         // Quit
         KeyCode::Char('q') => app.quit(),
         KeyCode::Esc => {
-            if app.filter.search_term.is_some() {
+            if app.filter.id_filter.is_some() {
+                app.filter.id_filter = None;
+                app.update_display_order();
+                app.selected_index = 0;
+                app.set_status("Showing all items".to_string(), StatusKind::Info);
+            } else if app.filter.search_term.is_some() {
                 app.filter.search_term = None;
                 app.update_display_order();
                 app.selected_index = 0;
