@@ -160,7 +160,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                 use app::ViewMode;
                 match (app.view, archived) {
                     (ViewMode::Archive, true) => {
-                        app.items = app.taskbook.get_all_archive_items()?;
+                        app.items = app.taskbook.archived_items()?;
                         app.update_display_order();
                     }
                     (ViewMode::Board | ViewMode::Timeline | ViewMode::Journal, false) => {

@@ -2,8 +2,8 @@
 
 use serde_json::{json, Value};
 
-use crate::taskbook::Taskbook;
-use taskbook_common::{board, due, StorageItem};
+use crate::taskbook::{ItemEdit, NewNote, NewTask, TaskState, Taskbook};
+use taskbook_common::{board, due, Priority, StorageItem};
 
 /// JSON Schema definitions for all exposed tools.
 pub fn definitions() -> Value {
@@ -35,7 +35,7 @@ pub fn definitions() -> Value {
                 "properties": {
                     "description": { "type": "string", "description": "Task description" },
                     "boards": { "type": "array", "items": { "type": "string" }, "description": "Boards to place the task on (defaults to My Board)" },
-                    "priority": { "type": "integer", "minimum": 1, "maximum": 3, "description": "1 = normal, 2 = medium, 3 = high (default 1)" },
+                    "priority": { "type": "integer", "minimum": 1, "maximum": 3, "description": "1 = high, 2 = medium, 3 = normal (default 3)" },
                     "tags": { "type": "array", "items": { "type": "string" }, "description": "Tags for the task" },
                     "due_date": { "type": "string", "description": "Due date: YYYY-MM-DD, 'YYYY-MM-DD HH:MM', today, tomorrow, now, or today+HHMM / tomorrow+HHMM / now+HHMM" }
                 },
@@ -75,7 +75,7 @@ pub fn definitions() -> Value {
                 "properties": {
                     "id": { "type": "integer", "description": "Item id" },
                     "description": { "type": "string", "description": "New description" },
-                    "priority": { "type": "integer", "minimum": 1, "maximum": 3, "description": "New priority (tasks only)" },
+                    "priority": { "type": "integer", "minimum": 1, "maximum": 3, "description": "New priority: 1 = high, 2 = medium, 3 = normal (tasks only)" },
                     "due_date": { "type": "string", "description": "New due date (YYYY-MM-DD, 'YYYY-MM-DD HH:MM', today, tomorrow, now, today+HHMM / tomorrow+HHMM / now+HHMM) or 'none' to clear (tasks only)" },
                     "boards": { "type": "array", "items": { "type": "string" }, "description": "Replace the item's boards" },
                     "tags": { "type": "array", "items": { "type": "string" }, "description": "Replace the item's tags" },
@@ -165,7 +165,7 @@ fn item_to_json(item: &StorageItem) -> Value {
             "pending"
         };
         v["state"] = json!(state);
-        v["priority"] = json!(task.priority);
+        v["priority"] = json!(task.priority.level());
         if let Some(millis) = task.due_date {
             v["due_date"] = json!(due::format_due_date(millis));
         }
@@ -197,35 +197,41 @@ fn opt_string_vec(args: &Value, key: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// A non-empty array of ids. Any non-integer element is an error rather than
+/// being skipped.
 fn arg_ids(args: &Value, key: &str) -> Result<Vec<u64>, String> {
+    let invalid = || format!("'{key}' must be a non-empty array of item ids");
     let ids: Vec<u64> = args
         .get(key)
         .and_then(Value::as_array)
-        .map(|arr| arr.iter().filter_map(Value::as_u64).collect())
-        .unwrap_or_default();
+        .ok_or_else(invalid)?
+        .iter()
+        .map(|v| v.as_u64().ok_or_else(invalid))
+        .collect::<Result<_, _>>()?;
     if ids.is_empty() {
-        Err(format!("'{key}' must be a non-empty array of item ids"))
-    } else {
-        Ok(ids)
+        return Err(invalid());
     }
+    Ok(ids)
 }
 
 fn parse_due_arg(raw: &str) -> Result<Option<i64>, String> {
     if raw.eq_ignore_ascii_case("none") {
         return Ok(None);
     }
-    due::parse_due_date(raw).map(Some).ok_or_else(|| {
-        format!("invalid due date '{raw}' (use YYYY-MM-DD, today, tomorrow or none)")
-    })
+    due::parse_due_date(raw)
+        .map(Some)
+        .ok_or_else(|| due::invalid_due_date_message(raw))
 }
 
-fn parse_priority_arg(args: &Value) -> Result<Option<u8>, String> {
+fn parse_priority_arg(args: &Value) -> Result<Option<Priority>, String> {
     match args.get("priority") {
         None => Ok(None),
-        Some(v) => match v.as_u64() {
-            Some(p @ 1..=3) => Ok(Some(p as u8)),
-            _ => Err("'priority' must be 1, 2 or 3".to_string()),
-        },
+        Some(v) => v
+            .as_u64()
+            .and_then(|p| u8::try_from(p).ok())
+            .and_then(Priority::from_level)
+            .map(Some)
+            .ok_or_else(|| "'priority' must be 1 (high), 2 (medium) or 3 (normal)".to_string()),
     }
 }
 
@@ -235,9 +241,9 @@ fn list_items(taskbook: &Taskbook, args: &Value) -> Result<Value, String> {
         .and_then(Value::as_bool)
         .unwrap_or(false);
     let data = if archived {
-        taskbook.get_all_archive_items()
+        taskbook.archived_items()
     } else {
-        taskbook.get_all_items()
+        taskbook.items()
     }
     .map_err(|e| e.to_string())?;
 
@@ -314,59 +320,34 @@ fn list_items(taskbook: &Taskbook, args: &Value) -> Result<Value, String> {
 }
 
 fn list_boards(taskbook: &Taskbook) -> Result<Value, String> {
-    let boards = taskbook.get_all_boards().map_err(|e| e.to_string())?;
+    let boards = taskbook.boards().map_err(|e| e.to_string())?;
     Ok(json!(boards))
 }
 
 fn create_task(taskbook: &Taskbook, args: &Value) -> Result<Value, String> {
-    let description = arg_str(args, "description")?.trim().to_string();
-    if description.is_empty() {
-        return Err("'description' must not be empty".to_string());
-    }
-    let mut boards: Vec<String> = opt_string_vec(args, "boards")
-        .iter()
-        .map(|b| board::normalize_board_name(b))
-        .collect();
-    if boards.is_empty() {
-        boards.push(board::DEFAULT_BOARD.to_string());
-    }
-    let priority = parse_priority_arg(args)?.unwrap_or(1);
-    let tags: Vec<String> = opt_string_vec(args, "tags")
-        .iter()
-        .map(|t| board::normalize_tag(t))
-        .filter(|t| !t.is_empty())
-        .collect();
-    let due_date = match args.get("due_date").and_then(Value::as_str) {
-        Some(raw) => parse_due_arg(raw)?,
-        None => None,
-    };
-
     let id = taskbook
-        .create_task_direct_with_tags(boards, description, priority, tags, due_date)
+        .create_task(NewTask {
+            description: arg_str(args, "description")?.to_string(),
+            boards: opt_string_vec(args, "boards"),
+            priority: parse_priority_arg(args)?.unwrap_or_default(),
+            tags: opt_string_vec(args, "tags"),
+            due_date: match args.get("due_date").and_then(Value::as_str) {
+                Some(raw) => parse_due_arg(raw)?,
+                None => None,
+            },
+        })
         .map_err(|e| e.to_string())?;
     Ok(json!({ "id": id, "type": "task" }))
 }
 
 fn create_note(taskbook: &Taskbook, args: &Value) -> Result<Value, String> {
-    let description = arg_str(args, "description")?.trim().to_string();
-    if description.is_empty() {
-        return Err("'description' must not be empty".to_string());
-    }
-    let mut boards: Vec<String> = opt_string_vec(args, "boards")
-        .iter()
-        .map(|b| board::normalize_board_name(b))
-        .collect();
-    if boards.is_empty() {
-        boards.push(board::DEFAULT_BOARD.to_string());
-    }
-    let tags: Vec<String> = opt_string_vec(args, "tags")
-        .iter()
-        .map(|t| board::normalize_tag(t))
-        .filter(|t| !t.is_empty())
-        .collect();
-
     let id = taskbook
-        .create_note_direct_with_tags(boards, description, tags)
+        .create_note(NewNote {
+            title: arg_str(args, "description")?.to_string(),
+            boards: opt_string_vec(args, "boards"),
+            body: None,
+            tags: opt_string_vec(args, "tags"),
+        })
         .map_err(|e| e.to_string())?;
     Ok(json!({ "id": id, "type": "note" }))
 }
@@ -374,93 +355,52 @@ fn create_note(taskbook: &Taskbook, args: &Value) -> Result<Value, String> {
 fn set_task_state(taskbook: &Taskbook, args: &Value) -> Result<Value, String> {
     let id = arg_u64(args, "id")?;
     let state = arg_str(args, "state")?;
+    let parsed: TaskState = state
+        .parse()
+        .map_err(|e: crate::error::TaskbookError| e.to_string())?;
     taskbook
-        .set_task_state_silent(id, state)
+        .set_task_state(id, parsed)
         .map_err(|e| e.to_string())?;
     Ok(json!({ "id": id, "state": state }))
 }
 
+/// Validates every field before applying any, and applies them in one save.
 fn edit_item(taskbook: &Taskbook, args: &Value) -> Result<Value, String> {
     let id = arg_u64(args, "id")?;
-    let mut changed: Vec<&str> = Vec::new();
-
-    if let Some(desc) = args.get("description").and_then(Value::as_str) {
-        let desc = desc.trim();
-        if desc.is_empty() {
-            return Err("'description' must not be empty".to_string());
-        }
-        taskbook
-            .edit_description_silent(id, desc)
-            .map_err(|e| e.to_string())?;
-        changed.push("description");
-    }
-    if let Some(priority) = parse_priority_arg(args)? {
-        taskbook
-            .update_priority_silent(id, priority)
-            .map_err(|e| e.to_string())?;
-        changed.push("priority");
-    }
-    if let Some(raw) = args.get("due_date").and_then(Value::as_str) {
-        let due_date = parse_due_arg(raw)?;
-        taskbook
-            .set_due_date_silent(id, due_date)
-            .map_err(|e| e.to_string())?;
-        changed.push("due_date");
-    }
-    if args.get("boards").is_some() {
-        let boards = opt_string_vec(args, "boards");
-        if boards.is_empty() {
-            return Err("'boards' must be a non-empty array of board names".to_string());
-        }
-        taskbook
-            .move_boards_silent(id, boards)
-            .map_err(|e| e.to_string())?;
-        changed.push("boards");
-    }
-    if args.get("tags").is_some() {
-        let new_tags: Vec<String> = opt_string_vec(args, "tags")
-            .iter()
-            .map(|t| board::normalize_tag(t))
-            .filter(|t| !t.is_empty())
-            .collect();
-        let data = taskbook.get_all_items().map_err(|e| e.to_string())?;
-        let current: Vec<String> = data
-            .get(&id.to_string())
-            .map(|item| item.tags().to_vec())
-            .unwrap_or_default();
-        taskbook
-            .update_tags_silent(id, &new_tags, &current)
-            .map_err(|e| e.to_string())?;
-        changed.push("tags");
-    }
-    if let Some(starred) = args.get("starred").and_then(Value::as_bool) {
-        taskbook
-            .set_starred_silent(id, starred)
-            .map_err(|e| e.to_string())?;
-        changed.push("starred");
-    }
-
+    let edit = ItemEdit {
+        description: args
+            .get("description")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        priority: parse_priority_arg(args)?,
+        due_date: args
+            .get("due_date")
+            .and_then(Value::as_str)
+            .map(parse_due_arg)
+            .transpose()?,
+        boards: args.get("boards").map(|_| opt_string_vec(args, "boards")),
+        tags: args.get("tags").map(|_| opt_string_vec(args, "tags")),
+        starred: args.get("starred").and_then(Value::as_bool),
+    };
+    let changed = edit.fields();
     if changed.is_empty() {
         return Err(
             "no editable fields provided (description, priority, due_date, boards, tags, starred)"
                 .to_string(),
         );
     }
+    taskbook.edit(id, edit).map_err(|e| e.to_string())?;
     Ok(json!({ "id": id, "updated": changed }))
 }
 
 fn delete_items(taskbook: &Taskbook, args: &Value) -> Result<Value, String> {
     let ids = arg_ids(args, "ids")?;
-    taskbook
-        .delete_items_silent(&ids)
-        .map_err(|e| e.to_string())?;
-    Ok(json!({ "deleted": ids }))
+    let deleted = taskbook.delete(&ids).map_err(|e| e.to_string())?;
+    Ok(json!({ "deleted": deleted }))
 }
 
 fn restore_items(taskbook: &Taskbook, args: &Value) -> Result<Value, String> {
     let ids = arg_ids(args, "ids")?;
-    taskbook
-        .restore_items_silent(&ids)
-        .map_err(|e| e.to_string())?;
-    Ok(json!({ "restored": ids }))
+    let restored = taskbook.restore(&ids).map_err(|e| e.to_string())?;
+    Ok(json!({ "restored": restored }))
 }

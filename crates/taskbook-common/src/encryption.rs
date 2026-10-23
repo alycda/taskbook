@@ -58,7 +58,7 @@ pub fn decrypt_item(key: &[u8; 32], encrypted: &EncryptedItem) -> Result<Storage
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Note, Task};
+    use crate::{Note, Priority, Task};
 
     #[test]
     fn test_generate_key_is_32_bytes() {
@@ -76,7 +76,12 @@ mod tests {
     #[test]
     fn test_encrypt_decrypt_task_roundtrip() {
         let key = generate_key();
-        let task = Task::new(1, "Test task".to_string(), vec!["My Board".to_string()], 1);
+        let task = Task::new(
+            1,
+            "Test task".to_string(),
+            vec!["My Board".to_string()],
+            Priority::Normal,
+        );
         let item = StorageItem::Task(task);
 
         let encrypted = encrypt_item(&key, &item).unwrap();
@@ -107,7 +112,12 @@ mod tests {
     fn test_wrong_key_fails_decryption() {
         let key1 = generate_key();
         let key2 = generate_key();
-        let task = Task::new(1, "Secret".to_string(), vec!["default".to_string()], 1);
+        let task = Task::new(
+            1,
+            "Secret".to_string(),
+            vec!["default".to_string()],
+            Priority::Normal,
+        );
         let item = StorageItem::Task(task);
 
         let encrypted = encrypt_item(&key1, &item).unwrap();
@@ -129,7 +139,12 @@ mod tests {
     #[test]
     fn test_tampered_ciphertext_fails() {
         let key = generate_key();
-        let task = Task::new(1, "Test".to_string(), vec!["default".to_string()], 1);
+        let task = Task::new(
+            1,
+            "Test".to_string(),
+            vec!["default".to_string()],
+            Priority::Normal,
+        );
         let item = StorageItem::Task(task);
 
         let mut encrypted = encrypt_item(&key, &item).unwrap();
@@ -144,7 +159,12 @@ mod tests {
     #[test]
     fn test_each_encryption_produces_unique_nonce() {
         let key = generate_key();
-        let task = Task::new(1, "Test".to_string(), vec!["default".to_string()], 1);
+        let task = Task::new(
+            1,
+            "Test".to_string(),
+            vec!["default".to_string()],
+            Priority::Normal,
+        );
         let item = StorageItem::Task(task);
 
         let enc1 = encrypt_item(&key, &item).unwrap();

@@ -148,6 +148,13 @@ impl StorageItem {
         matches!(self, StorageItem::Task(_))
     }
 
+    pub fn set_id(&mut self, id: u64) {
+        match self {
+            StorageItem::Task(t) => t.id = id,
+            StorageItem::Note(n) => n.id = id,
+        }
+    }
+
     pub fn set_description(&mut self, desc: String) {
         match self {
             StorageItem::Task(t) => t.description = desc,

@@ -5,7 +5,7 @@ use colored::{ColoredString, Colorize};
 use crate::config::{Config, Rgb, ThemeColors};
 use taskbook_common::board;
 use taskbook_common::due;
-use taskbook_common::StorageItem;
+use taskbook_common::{Priority, StorageItem};
 
 /// Statistics about items
 pub struct Stats {
@@ -14,6 +14,29 @@ pub struct Stats {
     pub in_progress: usize,
     pub pending: usize,
     pub notes: usize,
+}
+
+impl Stats {
+    pub fn from_items<'a>(items: impl IntoIterator<Item = &'a StorageItem>) -> Self {
+        let (mut complete, mut in_progress, mut pending, mut notes) = (0usize, 0, 0, 0);
+        for item in items {
+            match item.as_task() {
+                Some(t) if t.is_complete => complete += 1,
+                Some(t) if t.in_progress => in_progress += 1,
+                Some(_) => pending += 1,
+                None => notes += 1,
+            }
+        }
+        let total = complete + in_progress + pending;
+        let percent = (complete * 100).checked_div(total).unwrap_or(0) as u32;
+        Stats {
+            percent,
+            complete,
+            in_progress,
+            pending,
+            notes,
+        }
+    }
 }
 
 /// Item statistics for a group
@@ -171,26 +194,21 @@ impl Render {
     fn build_message(&self, item: &StorageItem) -> String {
         if let Some(task) = item.as_task() {
             let description = &task.description;
-            let priority = task.priority;
-
-            if !task.is_complete && priority > 1 {
-                let msg = if priority == 2 {
-                    self.warning(description).underline().to_string()
-                } else {
-                    self.error(description).underline().to_string()
-                };
-
-                let indicator = if priority == 2 {
-                    self.warning("(!)").to_string()
-                } else {
-                    self.error("(!!)").to_string()
-                };
-
-                format!("{} {}", msg, indicator)
-            } else if task.is_complete {
-                self.muted(description).strikethrough().to_string()
-            } else {
-                description.to_string()
+            if task.is_complete {
+                return self.muted(description).strikethrough().to_string();
+            }
+            match task.priority {
+                Priority::High => format!(
+                    "{} {}",
+                    self.error(description).underline(),
+                    self.error("(!!)")
+                ),
+                Priority::Medium => format!(
+                    "{} {}",
+                    self.warning(description).underline(),
+                    self.warning("(!)")
+                ),
+                Priority::Normal => description.to_string(),
             }
         } else {
             // Note: add [+] indicator if note has body content
@@ -397,55 +415,20 @@ impl Render {
         println!("  {} {}\n", status, notes_status);
     }
 
-    #[allow(dead_code)]
-    pub fn invalid_custom_app_dir(&self, path: &str) {
-        eprintln!(
-            "\n {} Custom app directory was not found on your system: {}",
-            self.error("✖"),
-            self.error(path)
-        );
-    }
-
-    #[allow(dead_code)]
-    pub fn missing_taskbook_dir_flag_value(&self) {
-        eprintln!(
-            "\n  {} Please provide a value for --taskbook-dir or remove the flag.",
-            self.error("✖")
-        );
-    }
-
-    pub fn invalid_id(&self, id: u64) {
-        eprintln!(
-            "\n {} Unable to find item with id: {}",
-            self.error("✖"),
-            self.muted(&id.to_string())
-        );
-    }
-
-    pub fn invalid_ids_number(&self) {
-        eprintln!(
-            "\n {} More than one ids were given as input",
-            self.error("✖")
-        );
-    }
-
-    pub fn invalid_priority(&self) {
-        eprintln!("\n {} Priority can only be 1, 2 or 3", self.error("✖"));
-    }
-
-    pub fn invalid_due_date(&self) {
-        eprintln!(
-            "\n {} Invalid due date. Use YYYY-MM-DD, today, tomorrow or none",
-            self.error("✖")
-        );
-    }
-
     /// Format IDs as comma-separated string
     fn format_ids(&self, ids: &[u64]) -> String {
         ids.iter()
             .map(|id| id.to_string())
             .collect::<Vec<_>>()
             .join(", ")
+    }
+
+    fn noun(ids: &[u64], singular: &'static str, plural: &'static str) -> &'static str {
+        if ids.len() > 1 {
+            plural
+        } else {
+            singular
+        }
     }
 
     /// Generic mark message for toggled states
@@ -487,18 +470,6 @@ impl Render {
         self.print_mark_message(ids, "Unstarred", "item", "items");
     }
 
-    pub fn missing_boards(&self) {
-        eprintln!("\n {} No boards were given as input", self.error("✖"));
-    }
-
-    pub fn missing_desc(&self) {
-        eprintln!("\n {} No description was given as input", self.error("✖"));
-    }
-
-    pub fn missing_id(&self) {
-        eprintln!("\n {} No id was given as input", self.error("✖"));
-    }
-
     pub fn success_create(&self, id: u64, is_task: bool) {
         let item_type = if is_task { "task:" } else { "note:" };
         println!(
@@ -521,42 +492,53 @@ impl Render {
         self.print_mark_message(ids, "Deleted", "item", "items");
     }
 
-    pub fn success_move(&self, id: u64, boards: &[String]) {
-        let boards_str = boards.join(", ");
+    pub fn success_move(&self, ids: &[u64], boards: &[String]) {
+        let boards_str = boards
+            .iter()
+            .map(|b| board::display_name(b))
+            .collect::<Vec<_>>()
+            .join(", ");
         println!(
-            "\n {} Move item: {} to {}",
+            "\n {} Moved {} {} to {}",
             self.success("✔"),
-            self.muted(&id.to_string()),
+            Self::noun(ids, "item", "items"),
+            self.muted(&self.format_ids(ids)),
             self.muted(&boards_str)
         );
     }
 
-    pub fn success_priority(&self, id: u64, level: u8) {
-        let level_str = match level {
-            3 => self.error("high").to_string(),
-            2 => self.warning("medium").to_string(),
-            _ => self.success("normal").to_string(),
+    pub fn success_priority(&self, ids: &[u64], priority: Priority) {
+        let level = priority.to_string();
+        let level = match priority {
+            Priority::High => self.error(&level),
+            Priority::Medium => self.warning(&level),
+            Priority::Normal => self.success(&level),
         };
         println!(
-            "\n {} Updated priority of task: {} to {}",
+            "\n {} Set priority of {} {} to {}",
             self.success("✔"),
-            self.muted(&id.to_string()),
-            level_str
+            Self::noun(ids, "task", "tasks"),
+            self.muted(&self.format_ids(ids)),
+            level
         );
     }
 
-    pub fn success_due_date(&self, id: u64, due_date: Option<i64>) {
+    pub fn success_due_date(&self, ids: &[u64], due_date: Option<i64>) {
+        let noun = Self::noun(ids, "task", "tasks");
+        let ids = self.muted(&self.format_ids(ids));
         match due_date {
             Some(millis) => println!(
-                "\n {} Set due date of task: {} to {}",
+                "\n {} Set due date of {} {} to {}",
                 self.success("✔"),
-                self.muted(&id.to_string()),
+                noun,
+                ids,
                 self.muted(&due::format_due_date(millis))
             ),
             None => println!(
-                "\n {} Cleared due date of task: {}",
+                "\n {} Cleared due date of {} {}",
                 self.success("✔"),
-                self.muted(&id.to_string())
+                noun,
+                ids
             ),
         }
     }
@@ -580,29 +562,29 @@ impl Render {
         );
     }
 
+    pub fn nothing_to_clear(&self) {
+        println!("\n {} No completed tasks to clear", self.muted("○"));
+    }
+
     pub fn note_cancelled(&self) {
         println!("\n {} Note creation cancelled", self.muted("○"));
     }
 
-    pub fn missing_tags(&self) {
-        eprintln!(
-            "\n {} No tags were given as input. Use +tag to add or -tag to remove.",
-            self.error("✖")
-        );
-    }
-
-    pub fn success_tag(&self, id: u64, added: &[String], removed: &[String]) {
+    pub fn success_tag(&self, ids: &[u64], added: &[String], removed: &[String]) {
+        let noun = Self::noun(ids, "item", "items");
+        let ids = self.muted(&self.format_ids(ids));
         if !added.is_empty() {
             let tags_str = added
                 .iter()
-                .map(|t| format!("+{}", t))
+                .map(|t| board::display_tag(t))
                 .collect::<Vec<_>>()
                 .join(", ");
             println!(
-                "\n {} Added tags {} to item: {}",
+                "\n {} Added tags {} to {} {}",
                 self.success("✔"),
                 self.info(&tags_str),
-                self.muted(&id.to_string())
+                noun,
+                ids
             );
         }
         if !removed.is_empty() {
@@ -612,10 +594,11 @@ impl Render {
                 .collect::<Vec<_>>()
                 .join(", ");
             println!(
-                "\n {} Removed tags {} from item: {}",
+                "\n {} Removed tags {} from {} {}",
                 self.success("✔"),
                 self.warning(&tags_str),
-                self.muted(&id.to_string())
+                noun,
+                ids
             );
         }
     }

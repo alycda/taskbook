@@ -18,10 +18,10 @@ pub fn sort_items_by(items: &mut [&StorageItem], method: SortMethod) {
             items.sort_by_key(|item| item.id());
         }
         SortMethod::Priority => {
-            items.sort_by(|a, b| {
-                let pa = a.as_task().map(|t| t.priority).unwrap_or(0);
-                let pb = b.as_task().map(|t| t.priority).unwrap_or(0);
-                pb.cmp(&pa).then_with(|| a.id().cmp(&b.id()))
+            // High first; notes after all tasks.
+            items.sort_by_key(|item| {
+                let priority = item.as_task().map(|t| t.priority);
+                (priority.is_none(), priority, item.id())
             });
         }
         SortMethod::Status => {
@@ -180,8 +180,8 @@ pub enum StatusKind {
 
 impl App {
     pub fn new(taskbook_dir: Option<&Path>) -> Result<Self> {
-        let taskbook = Taskbook::new(taskbook_dir)?;
         let config = Config::load_or_default();
+        let taskbook = Taskbook::from_config(&config, taskbook_dir)?;
         let theme = TuiTheme::from(&config.theme.resolve());
 
         let initial_view = config.default_view;
@@ -209,20 +209,14 @@ impl App {
             command_history: Vec::new(),
             history_index: None,
             history_saved_input: String::new(),
-            cached_stats: Stats {
-                percent: 0,
-                complete: 0,
-                in_progress: 0,
-                pending: 0,
-                notes: 0,
-            },
+            cached_stats: Stats::from_items([]),
         };
 
         app.refresh_items()?;
 
         // If restoring archive view, load archive items instead
         if initial_view == ViewMode::Archive {
-            app.items = app.taskbook.get_all_archive_items()?;
+            app.items = app.taskbook.archived_items()?;
             app.update_display_order();
             app.recalculate_stats();
         }
@@ -232,8 +226,8 @@ impl App {
 
     /// Refresh items from storage
     pub fn refresh_items(&mut self) -> Result<()> {
-        self.items = self.taskbook.get_all_items()?;
-        self.boards = self.taskbook.get_all_boards()?;
+        self.items = self.taskbook.items()?;
+        self.boards = self.taskbook.boards()?;
         self.update_display_order();
         self.recalculate_stats();
 
@@ -247,35 +241,7 @@ impl App {
 
     /// Recalculate cached statistics
     fn recalculate_stats(&mut self) {
-        let mut complete = 0;
-        let mut in_progress = 0;
-        let mut pending = 0;
-        let mut notes = 0;
-
-        for item in self.items.values() {
-            if let Some(task) = item.as_task() {
-                if task.is_complete {
-                    complete += 1;
-                } else if task.in_progress {
-                    in_progress += 1;
-                } else {
-                    pending += 1;
-                }
-            } else {
-                notes += 1;
-            }
-        }
-
-        let total = complete + pending + in_progress;
-        let percent = (complete * 100usize).checked_div(total).unwrap_or(0) as u32;
-
-        self.cached_stats = Stats {
-            percent,
-            complete,
-            in_progress,
-            pending,
-            notes,
-        };
+        self.cached_stats = Stats::from_items(self.items.values());
     }
 
     /// Check if an item should be shown based on current filters
@@ -521,9 +487,9 @@ impl App {
 
             // Reload data for archive view
             if view == ViewMode::Archive {
-                self.items = self.taskbook.get_all_archive_items()?;
+                self.items = self.taskbook.archived_items()?;
             } else {
-                self.items = self.taskbook.get_all_items()?;
+                self.items = self.taskbook.items()?;
             }
 
             self.update_display_order();
