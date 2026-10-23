@@ -125,9 +125,11 @@ impl Serialize for SortedItems<'_> {
 }
 
 /// Numeric keys first in numeric order, then any non-numeric keys lexically.
+/// Ties between distinct keys of equal value ("1", "01") break lexically, so
+/// the order never depends on HashMap iteration.
 fn compare_keys(a: &str, b: &str) -> Ordering {
     match (a.parse::<u64>(), b.parse::<u64>()) {
-        (Ok(x), Ok(y)) => x.cmp(&y),
+        (Ok(x), Ok(y)) => x.cmp(&y).then_with(|| a.cmp(b)),
         (Ok(_), Err(_)) => Ordering::Less,
         (Err(_), Ok(_)) => Ordering::Greater,
         (Err(_), Err(_)) => a.cmp(b),
@@ -211,5 +213,13 @@ mod tests {
         assert_eq!(compare_keys("10", "abc"), Ordering::Less);
         assert_eq!(compare_keys("abc", "2"), Ordering::Greater);
         assert_eq!(compare_keys("abc", "abd"), Ordering::Less);
+    }
+
+    #[test]
+    fn keys_with_equal_numeric_value_still_order_deterministically() {
+        // "1", "01" and "+1" all parse to 1; only a hand-edited file has them.
+        assert_eq!(compare_keys("01", "1"), Ordering::Less);
+        assert_eq!(compare_keys("1", "01"), Ordering::Greater);
+        assert_eq!(compare_keys("+1", "01"), Ordering::Less);
     }
 }
