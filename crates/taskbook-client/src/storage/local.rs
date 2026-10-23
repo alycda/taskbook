@@ -113,7 +113,8 @@ impl LocalStorage {
 }
 
 /// Serializes items in ascending numeric key order, so the same data always
-/// produces the same file (as the Node.js version's `JSON.stringify` did).
+/// produces the same file. For the IDs taskbook itself generates, this is the
+/// order the Node.js version's `JSON.stringify` wrote.
 struct SortedItems<'a>(&'a HashMap<String, StorageItem>);
 
 impl Serialize for SortedItems<'_> {
