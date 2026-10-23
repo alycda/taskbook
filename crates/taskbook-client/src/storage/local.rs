@@ -192,6 +192,8 @@ mod tests {
 
         let json = fs::read_to_string(&storage.storage_file).unwrap();
         assert_eq!(top_level_keys(&json), ["1", "2", "3", "9", "10", "100"]);
+
+        fs::remove_dir_all(&storage.main_app_dir).unwrap();
     }
 
     #[test]
@@ -206,6 +208,8 @@ mod tests {
         let second = fs::read(&storage.storage_file).unwrap();
 
         assert_eq!(first, second);
+
+        fs::remove_dir_all(&storage.main_app_dir).unwrap();
     }
 
     #[test]
