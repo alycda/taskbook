@@ -51,13 +51,16 @@ crates/
 │       ├── due.rs          # Due-date parsing/formatting/status (epoch millis)
 │       ├── encryption.rs   # AES-256-GCM encrypt/decrypt
 │       ├── error.rs        # CommonError type
+│       ├── id.rs           # Item id grammar (bare numbers; @ is a board)
+│       ├── priority.rs     # Priority enum (1 = high), legacy-field mapping
 │       └── models/         # StorageItem, Task, Note, Item trait
 │
 ├── taskbook-client/        # CLI + TUI binary (tb)
 │   └── src/
-│       ├── main.rs         # CLI entry point using clap
-│       ├── commands.rs     # Routes CLI flags to taskbook methods + migrate
-│       ├── taskbook.rs     # Core business logic (CRUD operations)
+│       ├── main.rs         # Entry point: legacy-flag shim, parse, print errors once
+│       ├── cli.rs          # clap subcommand definitions + 1.x flag rewriting
+│       ├── commands.rs     # Runs subcommands: parse args, call Taskbook, render + migrate
+│       ├── taskbook.rs     # Core business logic (validated, all-or-nothing, no output)
 │       ├── api_client.rs   # HTTP client for server communication
 │       ├── auth.rs         # Register, login, logout, status commands
 │       ├── credentials.rs  # Encryption key and token management
@@ -103,7 +106,7 @@ crates/
 
 2. **Client-Side Encryption**: All data is encrypted with AES-256-GCM before being sent to the server. The 32-byte encryption key is generated on registration and never leaves the client. Each item is encrypted individually with a unique random nonce.
 
-3. **Backward Compatible JSON Format**: Uses `#[serde(rename = "...")]` to match the original Node.js field names (`_id`, `_date`, `_isTask`, `isStarred`, etc.) for seamless data migration.
+3. **Backward Compatible JSON Format**: Uses `#[serde(rename = "...")]` to match the original Node.js field names (`_id`, `_date`, `_isTask`, `isStarred`, etc.) for seamless data migration. Priority is the exception: the authoritative field is `_priority` (1 = high, 2 = medium, 3 = normal); the legacy `priority` field (1 = normal … 3 = high) is still written for 1.x/Node.js readers and read only when `_priority` is absent (`Task` serializes through `TaskRepr` in `models/task.rs`).
 
 4. **Atomic Writes**: Local storage operations write to a temp file first, then rename to prevent data corruption on crash.
 
@@ -117,7 +120,11 @@ crates/
    (honoring `$XDG_CONFIG_HOME`), falling back to the legacy
    `~/.taskbook.json` when it exists and the XDG file does not.
 
-6. **Storage Structure (Local)**:
+6. **One Input Grammar**: Item ids are bare numbers everywhere (CLI, TUI command line); `@name` always names a board and `@3` is rejected with a hint (`taskbook_common::id`). Item-creation tokens (`@board`, `+tag`, `p:N`, `due:DATE`) are parsed by `board::parse_item_input` for both the CLI and the TUI.
+
+7. **Errors**: `Taskbook` methods never print. They validate every id (existence, and task-ness for task-only operations) before mutating, and return a typed `TaskbookError` whose `Display` is the full user-facing message. `main` prints it once and exits 1; clap usage errors exit 2. The TUI shows errors in the status bar.
+
+8. **Storage Structure (Local)**:
    ```
    ~/.taskbook/
    ├── storage/storage.json   # Active items
@@ -128,48 +135,54 @@ crates/
 
 ## CLI Usage
 
+Ids are bare numbers; `@name` always names a board. Priority: 1 = high,
+2 = medium, 3 = normal (default). The 1.x flag form (`tb --task ...`) is
+rewritten to the subcommand by `cli::rewrite_legacy_args` with a
+deprecation warning (removal planned for 3.0).
+
 ```bash
 # Task management
-tb                          # Display board view (TUI)
-tb --task "Description"     # Create task
-tb --task @board "Desc"     # Create task in specific board
-tb --task "Desc" p:2        # Create with priority (1=normal, 2=medium, 3=high)
-tb --task "Desc" due:2026-07-01  # Create with due date (also due:today, due:tomorrow)
-tb --task "Desc" due:tomorrow+0930  # Due with time via token: today/tomorrow/now+HHMM or YYYY-MM-DDTHH:MM (no spaces)
-tb --note "Description"     # Create note
-tb --note                   # Create note in external editor ($EDITOR)
-tb --check <id> [id...]     # Toggle task complete
-tb --begin <id> [id...]     # Toggle task in-progress
-tb --star <id> [id...]      # Toggle starred
-tb --delete <id> [id...]    # Delete to archive
-tb --restore <id> [id...]   # Restore from archive
-tb --edit @<id> "New desc"  # Edit description
-tb --edit-note @<id>        # Edit note in external editor ($EDITOR)
-tb --move @<id> board       # Move to board
-tb --priority @<id> <1-3>   # Set priority
-tb --due @<id> <date>       # Set due date (YYYY-MM-DD[ HH:MM], today, tomorrow, now, *+HHMM) or none to clear
-tb --find <term>            # Search items
-tb --list <attributes>      # Filter (pending, done, task, note, starred)
-tb --timeline               # Chronological view
-tb --archive                # View archived items
-tb --clear                  # Delete all completed tasks
-tb --copy <id> [id...]      # Copy descriptions to clipboard
+tb                          # Interactive board (TUI)
+tb board                    # Print board view (non-interactive)
+tb task Description         # Create task
+tb task @board Desc         # Create task in specific board
+tb task Desc p:1            # Create with priority (1=high, 2=medium, 3=normal)
+tb task Desc due:2026-07-01 # Create with due date (also due:today, due:tomorrow)
+tb task Desc due:tomorrow+0930  # Due with time via token: today/tomorrow/now+HHMM or YYYY-MM-DDTHH:MM (no spaces)
+tb note Description         # Create note
+tb note                     # Create note in external editor ($EDITOR)
+tb check <id>...            # Toggle task complete
+tb begin <id>...            # Toggle task in-progress
+tb star <id>...             # Toggle starred
+tb delete <id>...           # Delete to archive
+tb restore <id>...          # Restore from archive
+tb edit <id> New desc       # Edit description
+tb edit-note <id>           # Edit note in external editor ($EDITOR)
+tb move <id>... @board...   # Put items on boards
+tb priority <id>... <level> # Set priority (1|2|3, p1, p:1, high|medium|normal)
+tb due <id>... <date>       # Set due date (YYYY-MM-DD[ HH:MM], today, tomorrow, now, *+HHMM) or none to clear
+tb tag <id>... +a -b        # Add/remove tags
+tb find <term>...           # Search items
+tb list <filter>...         # Filter (pending, progress, done, task, note, starred, +tag, @board)
+tb timeline                 # Chronological view
+tb archive                  # View archived items
+tb clear                    # Archive all completed tasks
+tb copy <id>...             # Copy descriptions to clipboard
 
 # Server sync
-tb --register --server <url> --username <name> --email <email> --password <pass>
-tb --login --server <url> --username <name> --password <pass> --key <base64>
-tb --logout
-tb --status
-tb --migrate                # Push local data to server
+tb register --server <url> --username <name> --email <email> --password <pass>
+tb login --server <url> --username <name> --password <pass> --key <base64>
+tb logout
+tb status
+tb migrate                  # Push local data to server
 
 # Mode
-tb --cli                    # Force non-interactive CLI mode
-tb --mcp                    # Run as MCP stdio server
+tb mcp                      # Run as MCP stdio server
 ```
 
 ## MCP Server
 
-`tb --mcp` runs a Model Context Protocol server over stdio (newline-delimited
+`tb mcp` runs a Model Context Protocol server over stdio (newline-delimited
 JSON-RPC 2.0, no extra dependencies). It uses the configured storage backend:
 the remote server storage (with client-side encryption) when `sync.enabled =
 true` in the config file (`~/.config/taskbook/taskbook.json`), local files
@@ -178,13 +191,14 @@ otherwise.
 Register it in Claude Code:
 
 ```bash
-claude mcp add taskbook -- tb --mcp
+claude mcp add taskbook -- tb mcp
 ```
 
 Exposed tools: `list_items` (filters: state/type, board, tag, text query,
 archived), `list_boards`, `create_task` (with priority, tags, due date),
 `create_note`, `set_task_state` (pending/in_progress/done — deterministic, not
-a toggle), `edit_item` (partial update incl. due date and starred),
+a toggle), `edit_item` (partial update incl. due date and starred; validated
+up front and applied in one write), `priority` is 1 = high … 3 = normal,
 `delete_items`, `restore_items`. Implementation: `crates/taskbook-client/src/mcp/`.
 
 ## Server Configuration

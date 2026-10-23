@@ -76,28 +76,36 @@ Browse and restore deleted items.
 ## Usage
 
 ```bash
-tb                          # Display board view
-tb --task "Description"     # Create task
-tb --task @board "Desc"     # Create task in specific board
-tb --task "Desc" p:2        # Create with priority (1=normal, 2=medium, 3=high)
-tb --note "Description"     # Create note
-tb --note                   # Create note in external editor
-tb --edit-note @<id>        # Edit note in external editor
-tb --check <id> [id...]     # Toggle task complete
-tb --begin <id> [id...]     # Toggle task in-progress
-tb --star <id> [id...]      # Toggle starred
-tb --delete <id> [id...]    # Delete to archive
-tb --restore <id> [id...]   # Restore from archive
-tb --edit @<id> "New desc"  # Edit description
-tb --move @<id> board       # Move to board
-tb --priority @<id> <1-3>   # Set priority
-tb --find <term>            # Search items
-tb --list <attributes>      # Filter (pending, done, task, note, starred)
-tb --timeline               # Chronological view
-tb --archive                # View archived items
-tb --clear                  # Delete all completed tasks
-tb --copy <id> [id...]      # Copy descriptions to clipboard
+tb                              # Interactive board (TUI)
+tb board                        # Print the board view
+tb task Description             # Create task
+tb task @board Desc             # Create task in a specific board
+tb task Desc p:1                # Create with priority (1=high, 2=medium, 3=normal)
+tb task Desc +tag due:tomorrow  # Create with a tag and a due date
+tb note Description             # Create note
+tb note                         # Create note in external editor
+tb edit-note <id>               # Edit note in external editor
+tb check <id>...                # Toggle task complete
+tb begin <id>...                # Toggle task in-progress
+tb star <id>...                 # Toggle starred
+tb delete <id>...               # Delete to archive
+tb restore <id>...              # Restore from archive
+tb edit <id> New desc           # Edit description
+tb move <id>... @board          # Move to board
+tb priority <id>... <1-3>       # Set priority
+tb due <id>... <date|none>      # Set or clear due date
+tb tag <id>... +add -remove     # Add/remove tags
+tb find <term>...               # Search items
+tb list <filter>...             # Filter (pending, done, task, note, starred, +tag, @board)
+tb timeline                     # Chronological view
+tb archive                      # View archived items
+tb clear                        # Archive all completed tasks
+tb copy <id>...                 # Copy descriptions to clipboard
 ```
+
+Ids are bare numbers; `@name` always names a board. Coming from 1.x (or the
+Node.js taskbook)? See [Upgrading to 2.0](docs/upgrading-to-2.0.md). The 1.x
+flags (`tb --task ...`) still work with a deprecation warning.
 
 ## Server Sync
 
@@ -105,19 +113,19 @@ Optionally sync your tasks across devices with encrypted server storage:
 
 ```bash
 # Register an account (interactive)
-tb --register
+tb register
 
 # Migrate existing local data to server
-tb --migrate
+tb migrate
 
 # On another device, login with your encryption key
-tb --login
+tb login
 
 # Check sync status
-tb --status
+tb status
 
 # Logout and return to local-only mode
-tb --logout
+tb logout
 ```
 
 All data is encrypted client-side with AES-256-GCM before being sent to the server. Your encryption key is generated locally during registration and never leaves your device.

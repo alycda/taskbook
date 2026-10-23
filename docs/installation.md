@@ -109,7 +109,7 @@ docker compose up -d
 tb --version
 
 # Create your first task
-tb --task "Hello, taskbook!"
+tb task "Hello, taskbook!"
 
 # View your board
 tb

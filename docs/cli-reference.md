@@ -3,424 +3,428 @@
 ## Synopsis
 
 ```
-tb [OPTIONS] [INPUT...]
+tb [--taskbook-dir PATH] [COMMAND] [ARGS...]
 ```
+
+Running `tb` with no command opens the interactive board (TUI). Every other
+action is a subcommand: `tb task ...`, `tb check 1`, and so on. Run
+`tb <command> --help` for the arguments of one command.
+
+Two rules hold across every command:
+
+- **Item ids are bare numbers** (`3`). Commands that act on items accept one
+  or more leading ids: `tb check 1 2`, `tb priority 3 4 p1`.
+- **`@name` always names a board.** `@3` is never an id; taskbook 1.x used
+  that form for some commands, and 2.0 rejects it with a hint.
+
+Upgrading from 1.x? See [Upgrading to 2.0](upgrading-to-2.0.md).
 
 ## Display Commands
 
-### Board View (default)
+### Board View
 
 ```bash
-tb
+tb board
 ```
 
-Displays all items organized by board. This is the default when no options are provided.
+Prints all items grouped by board, followed by overall progress. Use this
+instead of `tb` when you want non-interactive output (scripts, pipes).
 
 ### Timeline View
 
 ```bash
-tb --timeline
-tb -i
+tb timeline
 ```
 
-Displays items in chronological order by creation date.
+Prints items grouped by creation date.
 
 ### Archive View
 
 ```bash
-tb --archive
-tb -a
+tb archive
 ```
 
-Displays archived (deleted) items.
+Prints archived (deleted) items. The ids shown here are archive ids, used by
+`tb restore`.
 
 ## Creating Items
 
 ### Create Task
 
 ```bash
-tb --task <description>
-tb -t <description>
+tb task [@BOARD]... [+TAG]... [p:1-3] [due:DATE] <DESCRIPTION>...
 ```
 
-Creates a new task. Tasks can be checked off when completed.
+Tokens may appear in any order; everything that is not a board, tag,
+priority or due date is the description.
 
-**Board assignment**: Prefix board names with `@`:
+**Boards**: prefix board names with `@`. Without one, the task goes to
+`My Board`.
 
 ```bash
-tb --task @work "Review pull request"
-tb --task @coding @review "Implement feature X"  # Multiple boards
+tb task @work Review pull request
+tb task @coding @review Implement feature X     # Multiple boards
 ```
 
-**Priority**: Append `p:N` where N is 1 (normal), 2 (medium), or 3 (high):
+**Priority**: `p:1` = high, `p:2` = medium, `p:3` = normal (the default).
+`p:high`, `p:medium` and `p:normal` also work. Any other `p:` value is an
+error.
 
 ```bash
-tb --task "Fix critical bug" p:3        # High priority
-tb --task @work "Update docs" p:2       # Medium priority
+tb task Fix critical bug p:1          # High priority
+tb task @work Update docs p:2         # Medium priority
 ```
 
-**Combined example**:
+**Tags**: prefix tags with `+`.
 
 ```bash
-tb --task @work @urgent "Deploy hotfix" p:3
+tb task @coding +urgent +frontend Fix login bug
+```
+
+**Due date**: `due:` followed by `YYYY-MM-DD`, `YYYY-MM-DDTHH:MM`, `today`,
+`tomorrow`, `now`, or `today+HHMM` / `tomorrow+HHMM` / `now+HHMM`. A token
+cannot contain a space, so use the `T` separator for a time.
+
+```bash
+tb task Pay rent due:2026-07-01
+tb task Call dentist due:tomorrow+0930
 ```
 
 ### Create Note
 
 ```bash
-tb --note <description>
-tb -n <description>
-tb --note
+tb note [@BOARD]... [+TAG]... [TEXT]...
+tb note
 ```
 
-Creates a note. Notes are for reference and cannot be checked off.
+Creates a note. Notes cannot be checked off and have no priority or due date
+(`p:` and `due:` tokens are rejected).
 
-When called without a description, opens your external editor (`$EDITOR` or `$VISUAL`, falling back to `vi`) to compose a note with a title and optional body. Lines starting with `//` are treated as comments and ignored. Delete all content to cancel.
+With no text, opens your external editor (`$EDITOR` or `$VISUAL`, falling
+back to `vi`) to compose a title and optional body. Lines starting with `//`
+are comments. Delete all content to cancel.
 
 ```bash
-tb --note "API endpoint: https://api.example.com"
-tb --note @meetings "Standup at 9am daily"
-tb --note                   # Opens editor for multi-line note
+tb note API endpoint: https://api.example.com
+tb note @meetings Standup at 9am daily
+tb note                      # Opens editor for a multi-line note
 ```
 
 ## Modifying Items
 
-### Check/Uncheck Task
+Every command below validates all of its ids before changing anything: if
+one id does not exist (or a task-only command is given a note), nothing is
+changed and every offending id is reported.
+
+### Check / Uncheck Task
 
 ```bash
-tb --check <id> [id...]
-tb -c <id> [id...]
+tb check <ID>...
 ```
 
-Toggles the completion status of tasks. Multiple IDs can be specified.
+Toggles tasks between done and pending.
+
+### Begin / Pause Task
 
 ```bash
-tb --check 1
-tb --check 1 2 3
+tb begin <ID>...
 ```
 
-### Begin/Pause Task
+Toggles tasks between in-progress and pending.
+
+### Star / Unstar Item
 
 ```bash
-tb --begin <id> [id...]
-tb -b <id> [id...]
+tb star <ID>...
 ```
 
-Toggles the in-progress status of tasks. In-progress tasks are highlighted differently in the board view.
-
-```bash
-tb --begin 2
-tb --begin 4 5
-```
-
-### Star/Unstar Item
-
-```bash
-tb --star <id> [id...]
-tb -s <id> [id...]
-```
-
-Toggles the starred status. Works on both tasks and notes.
-
-```bash
-tb --star 1
-tb --star 1 3 5
-```
+Toggles the star on tasks and notes.
 
 ### Edit Description
 
 ```bash
-tb --edit @<id> <new description>
-tb -e @<id> <new description>
+tb edit <ID> <DESCRIPTION>...
 ```
 
-Edits an item's description. The ID must be prefixed with `@`.
+Replaces one item's description. Everything after the id is the new text,
+including words that start with `@` or `+`.
 
 ```bash
-tb --edit @3 "Updated task description"
+tb edit 3 Merge PR #42
 ```
 
 ### Edit Note in Editor
 
 ```bash
-tb --edit-note @<id>
+tb edit-note <ID>
 ```
 
-Opens a note in your external editor (`$EDITOR` or `$VISUAL`, falling back to `vi`) for editing both the title and body. The first non-comment line becomes the title, and remaining lines become the body. Lines starting with `//` are comments and ignored. Delete all content to cancel.
-
-```bash
-tb --edit-note @5
-```
+Opens a note in your external editor to edit its title and body. The first
+non-comment line becomes the title; the remaining lines become the body.
 
 ### Set Priority
 
 ```bash
-tb --priority @<id> <1-3>
-tb -p @<id> <1-3>
+tb priority <ID>... <LEVEL>
 ```
 
-Sets task priority: 1 = normal, 2 = medium, 3 = high.
+The last argument is the level: `1`/`high`, `2`/`medium`, `3`/`normal`
+(`p1` and `p:1` also work). Tasks only.
 
 ```bash
-tb --priority @5 3    # Set to high priority
-tb --priority @5 1    # Set to normal priority
+tb priority 5 1          # High
+tb priority 5 6 medium   # Medium, two tasks
 ```
 
-### Move to Board
+### Set or Clear Due Date
 
 ```bash
-tb --move @<id> <board>
-tb -m @<id> <board>
+tb due <ID>... <DATE|none>
 ```
 
-Moves an item to a different board. Opens a board picker if the board name is omitted.
+Accepts the `due:` formats above, plus `"YYYY-MM-DD HH:MM"` (quoted or not).
+`none` clears the due date. Tasks only.
 
 ```bash
-tb --move @3 work
-tb --move @3 @personal   # @ prefix is optional for board name
+tb due 3 2026-07-01
+tb due 3 2026-07-01 14:30
+tb due 3 4 tomorrow
+tb due 3 none
+```
+
+### Move to Boards
+
+```bash
+tb move <ID>... <@BOARD>...
+```
+
+Puts items on exactly the given boards, replacing their current boards. The
+`@` is optional here, but a board whose name is a number must be written
+with it (`@2026`), since bare numbers are ids.
+
+```bash
+tb move 3 @work
+tb move 3 4 @work @review
+```
+
+### Add / Remove Tags
+
+```bash
+tb tag <ID>... <+TAG|-TAG>...
+```
+
+```bash
+tb tag 3 +urgent +frontend
+tb tag 3 4 -urgent
 ```
 
 ## Deleting and Restoring
 
-### Delete Item
+### Delete Items
 
 ```bash
-tb --delete <id> [id...]
-tb -d <id> [id...]
+tb delete <ID>...
 ```
 
-Moves items to the archive. They can be restored later.
-
-```bash
-tb --delete 4
-tb --delete 1 2 3
-```
+Moves items to the archive. Archived items get new (archive) ids.
 
 ### Restore from Archive
 
 ```bash
-tb --restore <id> [id...]
-tb -r <id> [id...]
+tb restore <ID>...
 ```
 
-Restores archived items back to the active board.
-
-```bash
-tb --restore 4
-tb --restore 10 11 12
-```
+Moves archived items back, using the ids shown by `tb archive`. Restored
+items get new ids.
 
 ### Clear Completed
 
 ```bash
-tb --clear
+tb clear
 ```
 
-Permanently deletes all completed (checked) tasks from all boards.
+Moves every completed task to the archive.
 
 ## Searching and Filtering
 
 ### Find Items
 
 ```bash
-tb --find <search term>
-tb -f <search term>
+tb find <TERM>...
 ```
 
-Searches for items containing the search term in their description.
+Shows items where any term matches the description, note body or tags
+(case-insensitive substring). A `+term` only matches tags.
 
 ```bash
-tb --find documentation
-tb --find "pull request"
+tb find documentation
+tb find "pull request"
+tb find +urgent
 ```
 
-### List by Attributes
+### List by Filters
 
 ```bash
-tb --list <attributes>
-tb -l <attributes>
+tb list [FILTER]...
 ```
 
-Filters items by one or more attributes:
+Shows items matching every filter. With no filters, same as `tb board`.
 
-| Attribute | Description |
-|-----------|-------------|
-| `pending` | Incomplete tasks |
-| `done` | Completed tasks |
-| `task` | All tasks |
-| `note` | All notes |
-| `starred` | Starred items |
+| Filter | Matches |
+|--------|---------|
+| `pending` | Tasks neither done nor in progress |
+| `progress` | In-progress tasks (also `started`, `begun`, `in_progress`) |
+| `done` | Completed tasks (also `checked`, `complete`) |
+| `task` | All tasks (also `tasks`, `todo`) |
+| `note` | All notes (also `notes`) |
+| `starred` | Starred items (also `star`) |
+| `+tag` | Items with that tag |
+| `@board` | Restricts the view to that board (must exist) |
+
+A bare word that is not a filter is accepted if it names an existing board;
+anything else is an error (so a typo like `pendng` fails instead of showing
+everything).
 
 ```bash
-tb --list pending
-tb --list done starred
-tb --list task pending    # Pending tasks only
+tb list pending
+tb list done starred
+tb list pending @coding +urgent
 ```
 
 ## Clipboard
 
-### Copy to Clipboard
-
 ```bash
-tb --copy <id> [id...]
-tb -y <id> [id...]
+tb copy <ID>...
 ```
 
-Copies item descriptions to the system clipboard. Multiple items are joined with newlines.
-
-```bash
-tb --copy 1
-tb --copy 1 2 3
-```
+Copies item descriptions to the system clipboard, one per line.
 
 ## Server Commands
 
-These commands are used for syncing with a remote server. See [Sync & Encryption](sync.md) for details.
+These commands sync with a remote server. See [Sync & Encryption](sync.md)
+for details. Each prompts interactively for values not given as options.
 
 ### Register Account
 
 ```bash
-tb --register [OPTIONS]
+tb register [--server URL] [--username NAME] [--email EMAIL] [--password PASS]
 ```
 
-Creates a new account on the sync server. Prompts interactively for missing values.
-
-| Option | Description |
-|--------|-------------|
-| `--server <url>` | Server URL |
-| `--username <name>` | Username |
-| `--email <email>` | Email address |
-| `--password <pass>` | Password (prompted securely if omitted) |
-
 ```bash
-# Fully interactive (recommended)
-tb --register
-
-# Partial - prompts for password
-tb --register --server https://taskbook.example.com --username alice --email alice@example.com
+tb register                      # Fully interactive (recommended)
+tb register --server https://taskbook.example.com --username alice --email alice@example.com
 ```
 
 ### Login
 
 ```bash
-tb --login [OPTIONS]
+tb login [--server URL] [--username NAME] [--password PASS] [--key BASE64]
 ```
 
-Logs in to an existing account. Prompts interactively for missing values.
-
-| Option | Description |
-|--------|-------------|
-| `--server <url>` | Server URL |
-| `--username <name>` | Username |
-| `--password <pass>` | Password (prompted securely if omitted) |
-| `--key <base64>` | Encryption key from registration |
-
-```bash
-# Fully interactive
-tb --login
-
-# With server specified
-tb --login --server https://taskbook.example.com
-```
+`--key` is the encryption key printed at registration.
 
 ### Logout
 
 ```bash
-tb --logout
+tb logout
 ```
 
-Logs out and deletes stored credentials. Sync is disabled and the client returns to local-only mode.
+Logs out and deletes stored credentials. The client returns to local-only
+mode.
 
 ### Status
 
 ```bash
-tb --status
+tb status
 ```
 
-Shows current sync status, server URL, and whether credentials are saved.
+Shows sync status, server URL, and whether credentials are saved.
 
 ### Migrate Local Data
 
 ```bash
-tb --migrate
+tb migrate
 ```
 
-Pushes existing local data to the server. Use this after registering to upload your existing tasks.
+Pushes existing local data to the server. Use this after registering to
+upload your existing items.
+
+### MCP Server
+
+```bash
+tb mcp
+```
+
+Runs a Model Context Protocol server over stdio (newline-delimited JSON-RPC
+2.0) against the configured storage backend. Register it with Claude Code:
+
+```bash
+claude mcp add taskbook -- tb mcp
+```
+
+Tools: `list_items`, `list_boards`, `create_task`, `create_note`,
+`set_task_state`, `edit_item`, `delete_items`, `restore_items`. The
+`priority` field uses the same scale as the CLI (1 = high … 3 = normal).
 
 ## Global Options
 
 ### Custom Taskbook Directory
 
 ```bash
-tb --taskbook-dir <path>
+tb --taskbook-dir <PATH> [COMMAND]
 ```
 
-Use a custom directory for storing taskbook data instead of `~/.taskbook/`.
+Uses a custom directory instead of `~/.taskbook/`. Can also be set with the
+`TASKBOOK_DIR` environment variable.
 
 ```bash
-tb --taskbook-dir ~/work-tasks --task "Work item"
+tb --taskbook-dir ~/work-tasks task Work item
+TASKBOOK_DIR=~/work-tasks tb board
 ```
 
-Can also be set via environment variable:
+### Help and Version
 
 ```bash
-export TASKBOOK_DIR=~/work-tasks
-tb --task "Work item"
+tb --help             # All commands
+tb <command> --help   # One command
+tb --version          # Also -v
 ```
 
-### CLI Mode
+## Exit Status and Errors
 
-```bash
-tb --cli
-```
-
-Runs in non-interactive CLI mode, printing output to stdout instead of launching the interactive TUI. Useful for scripting or piping output.
-
-### Help
-
-```bash
-tb --help
-tb -h
-```
-
-Displays help message with all available options.
-
-### Version
-
-```bash
-tb --version
-tb -v
-```
-
-Displays the installed version.
+`tb` exits `0` on success, `1` when an operation fails (unknown id, note
+given a priority, invalid date, ...), and `2` for a malformed command line
+(unknown command, non-numeric id, missing argument). Each error is printed
+once, to stderr.
 
 ## Examples
 
 ```bash
 # Daily workflow
-tb                                    # View boards
-tb --task @work "Code review"         # Create task
-tb --begin 1                          # Start working
-tb --check 1                          # Mark done
+tb                                    # Interactive board
+tb task @work Code review p:1         # Create a high-priority task
+tb begin 1                            # Start working
+tb check 1                            # Mark done
 
-# Organize tasks
-tb --task @personal "Buy groceries" p:2
-tb --star 3
-tb --move @3 shopping
+# Organize
+tb task @personal Buy groceries p:2 due:tomorrow
+tb star 3
+tb move 3 @shopping
+tb tag 3 +errands
 
 # Search and filter
-tb --find meeting
-tb --list pending starred
-tb --timeline
+tb find meeting
+tb list pending starred
+tb timeline
 
 # Cleanup
-tb --delete 5 6 7
-tb --clear
-tb --archive                          # View deleted items
-tb --restore 5                        # Oops, restore one
+tb delete 5 6 7
+tb clear
+tb archive                            # View deleted items
+tb restore 5                          # Restore by archive id
 
 # Server sync
-tb --register
-tb --migrate
-tb --status
+tb register
+tb migrate
+tb status
 ```

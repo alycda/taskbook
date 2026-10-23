@@ -25,7 +25,7 @@ Taskbook supports syncing your tasks across multiple devices using an encrypted 
 ### 1. Register an Account
 
 ```bash
-tb --register
+tb register
 ```
 
 You'll be prompted for:
@@ -52,7 +52,7 @@ Your encryption key (save this — it cannot be recovered):
 After registration, sync is automatically enabled. Use taskbook normally:
 
 ```bash
-tb --task "My synced task"
+tb task "My synced task"
 tb
 ```
 
@@ -63,7 +63,7 @@ All operations are now synced to the server.
 To access your tasks on another device:
 
 ```bash
-tb --login
+tb login
 ```
 
 You'll be prompted for:
@@ -80,12 +80,12 @@ If you have existing local tasks and want to sync them to the server:
 
 ```bash
 # First, register or login
-tb --register
+tb register
 # or
-tb --login
+tb login
 
 # Then migrate your local data
-tb --migrate
+tb migrate
 ```
 
 The migrate command:
@@ -96,7 +96,7 @@ The migrate command:
 ## Check Sync Status
 
 ```bash
-tb --status
+tb status
 ```
 
 Output shows:
@@ -112,7 +112,7 @@ Server URL:  https://taskbook.example.com
 To disable sync and remove credentials:
 
 ```bash
-tb --logout
+tb logout
 ```
 
 This:
@@ -212,7 +212,7 @@ curl http://localhost:8080/api/v1/health
 Your session may have expired:
 ```bash
 # Login again
-tb --login
+tb login
 ```
 
 ### "Decryption failed"
@@ -226,7 +226,7 @@ cat ~/.taskbook/credentials.json
 ### Lost Encryption Key
 
 If you've lost your encryption key, your data cannot be recovered. You'll need to:
-1. Create a new account with `tb --register`
+1. Create a new account with `tb register`
 2. Start fresh with new tasks
 
 This is by design - the server cannot decrypt your data without your key.
