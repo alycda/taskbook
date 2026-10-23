@@ -15,6 +15,14 @@ pub enum DueStatus {
     Upcoming,
 }
 
+/// The user-facing error for a due-date string [`parse_due_date`] rejects.
+pub fn invalid_due_date_message(raw: &str) -> String {
+    format!(
+        "invalid due date '{raw}' (use YYYY-MM-DD, \"YYYY-MM-DD HH:MM\", today, tomorrow, now, \
+         or today/tomorrow/now+HHMM)"
+    )
+}
+
 /// Parse a due-date string into epoch millis (local time).
 ///
 /// Accepted formats (case-insensitive for keywords):

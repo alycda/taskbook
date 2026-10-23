@@ -23,6 +23,23 @@ pub fn render_stats_line(frame: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
+    // Id filter indicator
+    if let Some(ref ids) = app.filter.id_filter {
+        let ids = ids
+            .iter()
+            .map(u64::to_string)
+            .collect::<Vec<_>>()
+            .join(", ");
+        let line = Line::from(vec![
+            Span::raw("  "),
+            Span::styled("Showing: ", app.theme.info),
+            Span::styled(ids, app.theme.info.add_modifier(Modifier::BOLD)),
+            Span::styled("  (Esc to clear)", app.theme.muted),
+        ]);
+        frame.render_widget(Paragraph::new(line), area);
+        return;
+    }
+
     // Search indicator
     if let Some(ref term) = app.filter.search_term {
         let search_line = Line::from(vec![

@@ -150,7 +150,8 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
 
         match events.next()? {
             event::Event::Key(key) => {
-                actions::handle_key_event(app, key)?;
+                let result = actions::handle_key_event(app, key);
+                actions::report(app, result)?;
             }
             event::Event::Tick => {
                 app.tick();
@@ -158,16 +159,17 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
             event::Event::Resize(_, _) => {}
             event::Event::DataChanged { archived } => {
                 use app::ViewMode;
-                match (app.view, archived) {
-                    (ViewMode::Archive, true) => {
-                        app.items = app.taskbook.get_all_archive_items()?;
+                let result = match (app.view, archived) {
+                    (ViewMode::Archive, true) => app.taskbook.archived_items().map(|items| {
+                        app.items = items;
                         app.update_display_order();
-                    }
+                    }),
                     (ViewMode::Board | ViewMode::Timeline | ViewMode::Journal, false) => {
-                        app.refresh_items()?;
+                        app.refresh_items()
                     }
-                    _ => {} // Data will be loaded when user switches views
-                }
+                    _ => Ok(()), // Data will be loaded when user switches views
+                };
+                actions::report(app, result)?;
             }
         }
     }

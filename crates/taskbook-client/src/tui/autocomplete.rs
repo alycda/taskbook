@@ -9,6 +9,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("move", "Move item to board"),
     ("delete", "Delete items"),
     ("search", "Search/filter items"),
+    ("show", "Show only the given item ids"),
     ("priority", "Set task priority"),
     ("check", "Toggle task check"),
     ("star", "Toggle star"),
@@ -26,9 +27,9 @@ const COMMANDS: &[(&str, &str)] = &[
     ("quit", "Quit application"),
 ];
 
-/// Commands that accept item ID references (@<id>)
+/// Commands that accept item ids
 const ITEM_COMMANDS: &[&str] = &[
-    "check", "star", "begin", "delete", "edit", "move", "priority", "tag",
+    "check", "star", "begin", "delete", "edit", "move", "priority", "tag", "show",
 ];
 
 const MAX_SUGGESTIONS: usize = 8;
@@ -65,11 +66,7 @@ pub fn update_suggestions(app: &mut App) {
         let last_token: String = chars[last_space + 1..cursor].iter().collect();
 
         if let Some(after_at) = last_token.strip_prefix('@') {
-            // If it's @<digits>, user is typing an ID directly — no suggestions
-            if !after_at.is_empty() && after_at.chars().all(|c| c.is_ascii_digit()) {
-                return;
-            }
-            // Otherwise it's a board reference
+            // @ always names a board
             suggest_boards(app, after_at);
         } else if ITEM_COMMANDS.contains(&command) {
             // Check if we should suggest items for this argument position
@@ -89,13 +86,13 @@ fn should_suggest_items(command: &str, text_to_cursor: &str, _last_space: usize)
     let args: Vec<&str> = after_command.split_whitespace().collect();
 
     match command {
-        // /edit @<id> <description> — only suggest for the first argument
+        // /edit <id> <description> — only suggest for the first argument
         "edit" => args.len() <= 1,
-        // /move @<id> @<board> — only suggest for the first argument
+        // /move <id> @<board> — only suggest for the first argument
         "move" => args.len() <= 1,
-        // /priority @<id> <1-3> — only suggest for the first argument
+        // /priority <id> <1-3> — only suggest for the first argument
         "priority" => args.len() <= 1,
-        // /tag @<id> +tag1 -tag2 — only suggest for the first argument
+        // /tag <id> +tag1 -tag2 — only suggest for the first argument
         "tag" => args.len() <= 1,
         // Multi-ID commands: check, star, begin, delete — always suggest
         _ => true,
@@ -209,10 +206,10 @@ fn suggest_items(app: &mut App, partial: &str) {
             desc.to_string()
         };
 
-        // Build completion: replace the partial token with @<id>
+        // Build completion: replace the partial token with the id
         let before_token: String = input_chars[..last_space + 1].iter().collect();
         let after_cursor: String = input_chars[cursor..].iter().collect();
-        let completion = format!("{}@{} {}", before_token, id, after_cursor);
+        let completion = format!("{}{} {}", before_token, id, after_cursor);
 
         app.command_line.suggestions.push(Suggestion {
             display,

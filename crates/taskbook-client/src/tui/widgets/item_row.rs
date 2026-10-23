@@ -6,7 +6,7 @@ use ratatui::{
 use crate::tui::app::App;
 use taskbook_common::board;
 use taskbook_common::due;
-use taskbook_common::StorageItem;
+use taskbook_common::{Priority, StorageItem};
 
 /// Options for rendering an item row
 pub struct ItemRowOptions {
@@ -65,9 +65,9 @@ pub fn render_item_line(
     let desc_style = if let Some(task) = item.as_task() {
         if task.is_complete {
             app.theme.completed_text
-        } else if task.priority == 3 {
+        } else if task.priority == Priority::High {
             app.theme.error.add_modifier(Modifier::BOLD)
-        } else if task.priority == 2 {
+        } else if task.priority == Priority::Medium {
             app.theme.warning
         } else {
             Style::default().fg(Color::White)
@@ -114,9 +114,9 @@ pub fn render_item_line(
 
     // Priority indicator
     if let Some(task) = item.as_task() {
-        if task.priority == 2 {
+        if task.priority == Priority::Medium {
             spans.push(Span::styled(" (!)", app.theme.warning));
-        } else if task.priority == 3 {
+        } else if task.priority == Priority::High {
             spans.push(Span::styled(" (!!)", app.theme.error));
         }
     }

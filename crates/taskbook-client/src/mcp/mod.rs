@@ -1,7 +1,7 @@
 //! MCP (Model Context Protocol) stdio server.
 //!
 //! Speaks newline-delimited JSON-RPC 2.0 on stdin/stdout so taskbook can be
-//! used as an MCP server from agents like Claude Code (`tb --mcp`). Uses the
+//! used as an MCP server from agents like Claude Code (`tb mcp`). Uses the
 //! configured storage backend — the remote server storage when sync is
 //! enabled. Only JSON-RPC goes to stdout; diagnostics go to stderr.
 
@@ -372,5 +372,98 @@ mod tests {
         assert_eq!(lines[0]["id"], 1);
         assert_eq!(lines[1]["id"], 2);
         assert!(lines[1]["result"]["tools"].is_array());
+    }
+
+    #[test]
+    fn edit_item_is_atomic_and_rejects_task_fields_on_notes() {
+        let tb = test_taskbook();
+        request(
+            &tb,
+            json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+                "name":"create_note","arguments":{"description":"Idea"}
+            }}),
+        );
+        let resp = request(
+            &tb,
+            json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{
+                "name":"edit_item","arguments":{"id":1,"description":"Changed","priority":1}
+            }}),
+        );
+        assert_eq!(resp["result"]["isError"], true);
+        let resp = request(
+            &tb,
+            json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{
+                "name":"list_items","arguments":{}
+            }}),
+        );
+        assert_eq!(tool_payload(&resp)[0]["description"], "Idea");
+    }
+
+    #[test]
+    fn priority_defaults_to_normal_and_rejects_out_of_range() {
+        let tb = test_taskbook();
+        request(
+            &tb,
+            json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+                "name":"create_task","arguments":{"description":"Plain"}
+            }}),
+        );
+        let resp = request(
+            &tb,
+            json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{
+                "name":"list_items","arguments":{}
+            }}),
+        );
+        assert_eq!(tool_payload(&resp)[0]["priority"], 3);
+        let resp = request(
+            &tb,
+            json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{
+                "name":"create_task","arguments":{"description":"Bad","priority":4}
+            }}),
+        );
+        assert_eq!(resp["result"]["isError"], true);
+    }
+
+    #[test]
+    fn delete_items_rejects_non_integer_ids() {
+        let tb = test_taskbook();
+        let resp = request(
+            &tb,
+            json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+                "name":"delete_items","arguments":{"ids":[1,"x"]}
+            }}),
+        );
+        assert_eq!(resp["result"]["isError"], true);
+    }
+
+    #[test]
+    fn wrongly_typed_arguments_are_errors_not_empty_values() {
+        let tb = test_taskbook();
+        request(
+            &tb,
+            json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+                "name":"create_task","arguments":{"description":"A","tags":["keep"]}
+            }}),
+        );
+        for args in [
+            json!({"id":1,"tags":"urgent"}),
+            json!({"id":1,"starred":"yes"}),
+            json!({"id":1,"boards":["ok", 3]}),
+        ] {
+            let resp = request(
+                &tb,
+                json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{
+                    "name":"edit_item","arguments":args
+                }}),
+            );
+            assert_eq!(resp["result"]["isError"], true, "{args}");
+        }
+        let resp = request(
+            &tb,
+            json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{
+                "name":"list_items","arguments":{}
+            }}),
+        );
+        assert_eq!(tool_payload(&resp)[0]["tags"], json!(["keep"]));
     }
 }

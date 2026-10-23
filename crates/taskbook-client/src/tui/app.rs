@@ -18,10 +18,10 @@ pub fn sort_items_by(items: &mut [&StorageItem], method: SortMethod) {
             items.sort_by_key(|item| item.id());
         }
         SortMethod::Priority => {
-            items.sort_by(|a, b| {
-                let pa = a.as_task().map(|t| t.priority).unwrap_or(0);
-                let pb = b.as_task().map(|t| t.priority).unwrap_or(0);
-                pb.cmp(&pa).then_with(|| a.id().cmp(&b.id()))
+            // High first; notes after all tasks.
+            items.sort_by_key(|item| {
+                let priority = item.as_task().map(|t| t.priority);
+                (priority.is_none(), priority, item.id())
             });
         }
         SortMethod::Status => {
@@ -157,6 +157,8 @@ pub struct FilterState {
     #[allow(dead_code)]
     pub attributes: Vec<String>,
     pub search_term: Option<String>,
+    /// Show only these item ids (`/show`). Overrides the other filters.
+    pub id_filter: Option<Vec<u64>>,
     /// Filter to show only items from this board
     pub board_filter: Option<String>,
     /// Hide completed tasks
@@ -180,8 +182,8 @@ pub enum StatusKind {
 
 impl App {
     pub fn new(taskbook_dir: Option<&Path>) -> Result<Self> {
-        let taskbook = Taskbook::new(taskbook_dir)?;
         let config = Config::load_or_default();
+        let taskbook = Taskbook::from_config(&config, taskbook_dir)?;
         let theme = TuiTheme::from(&config.theme.resolve());
 
         let initial_view = config.default_view;
@@ -209,20 +211,14 @@ impl App {
             command_history: Vec::new(),
             history_index: None,
             history_saved_input: String::new(),
-            cached_stats: Stats {
-                percent: 0,
-                complete: 0,
-                in_progress: 0,
-                pending: 0,
-                notes: 0,
-            },
+            cached_stats: Stats::from_items([]),
         };
 
         app.refresh_items()?;
 
         // If restoring archive view, load archive items instead
         if initial_view == ViewMode::Archive {
-            app.items = app.taskbook.get_all_archive_items()?;
+            app.items = app.taskbook.archived_items()?;
             app.update_display_order();
             app.recalculate_stats();
         }
@@ -232,8 +228,8 @@ impl App {
 
     /// Refresh items from storage
     pub fn refresh_items(&mut self) -> Result<()> {
-        self.items = self.taskbook.get_all_items()?;
-        self.boards = self.taskbook.get_all_boards()?;
+        self.items = self.taskbook.items()?;
+        self.boards = self.taskbook.boards()?;
         self.update_display_order();
         self.recalculate_stats();
 
@@ -247,39 +243,14 @@ impl App {
 
     /// Recalculate cached statistics
     fn recalculate_stats(&mut self) {
-        let mut complete = 0;
-        let mut in_progress = 0;
-        let mut pending = 0;
-        let mut notes = 0;
-
-        for item in self.items.values() {
-            if let Some(task) = item.as_task() {
-                if task.is_complete {
-                    complete += 1;
-                } else if task.in_progress {
-                    in_progress += 1;
-                } else {
-                    pending += 1;
-                }
-            } else {
-                notes += 1;
-            }
-        }
-
-        let total = complete + pending + in_progress;
-        let percent = (complete * 100usize).checked_div(total).unwrap_or(0) as u32;
-
-        self.cached_stats = Stats {
-            percent,
-            complete,
-            in_progress,
-            pending,
-            notes,
-        };
+        self.cached_stats = Stats::from_items(self.items.values());
     }
 
     /// Check if an item should be shown based on current filters
     pub fn should_show_item(&self, item: &StorageItem) -> bool {
+        if let Some(ref ids) = self.filter.id_filter {
+            return ids.contains(&item.id());
+        }
         if self.filter.hide_completed {
             if let Some(task) = item.as_task() {
                 if task.is_complete {
@@ -358,31 +329,7 @@ impl App {
                 let mut items: Vec<_> = self
                     .items
                     .values()
-                    .filter(|item| {
-                        if self.filter.hide_completed {
-                            if let Some(task) = item.as_task() {
-                                if task.is_complete {
-                                    return false;
-                                }
-                            }
-                        }
-                        if let Some(ref term) = self.filter.search_term {
-                            let term_lower = term.to_lowercase();
-                            let in_desc = item.description().to_lowercase().contains(&term_lower);
-                            let in_body = item
-                                .note_body()
-                                .map(|b| b.to_lowercase().contains(&term_lower))
-                                .unwrap_or(false);
-                            let in_tags = item
-                                .tags()
-                                .iter()
-                                .any(|t| t.to_lowercase().contains(&term_lower));
-                            if !in_desc && !in_body && !in_tags {
-                                return false;
-                            }
-                        }
-                        true
-                    })
+                    .filter(|item| self.should_show_item(item))
                     .collect();
                 items.sort_by(|a, b| {
                     b.timestamp()
@@ -424,6 +371,7 @@ impl App {
 
     /// Set board filter
     pub fn set_board_filter(&mut self, board: Option<String>) {
+        self.filter.id_filter = None;
         self.filter.board_filter = board;
         self.selected_index = 0;
         self.update_display_order();
@@ -514,6 +462,8 @@ impl App {
         if self.view != view {
             self.view = view;
             self.selected_index = 0;
+            // Ids are per view (archive ids differ), so an id filter can't carry over.
+            self.filter.id_filter = None;
 
             // Persist the view choice
             self.config.default_view = view;
@@ -521,9 +471,9 @@ impl App {
 
             // Reload data for archive view
             if view == ViewMode::Archive {
-                self.items = self.taskbook.get_all_archive_items()?;
+                self.items = self.taskbook.archived_items()?;
             } else {
-                self.items = self.taskbook.get_all_items()?;
+                self.items = self.taskbook.items()?;
             }
 
             self.update_display_order();

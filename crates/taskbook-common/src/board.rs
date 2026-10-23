@@ -3,6 +3,9 @@
 //! Board names are stored **without** the `@` prefix. The `@` is added back
 //! only at the display layer via [`display_name`].
 
+use crate::due;
+use crate::priority::{ParsePriorityError, Priority};
+
 /// The default board name used when no board is specified.
 pub const DEFAULT_BOARD: &str = "My Board";
 
@@ -41,83 +44,102 @@ pub fn display_name(board: &str) -> String {
     }
 }
 
-/// Structured result of parsing CLI create input.
+/// Structured result of parsing item-creation input.
 #[derive(Debug)]
 pub struct ParsedInput {
+    /// Boards named with `@`. Empty from [`parse_item_input`] when none were
+    /// given; [`parse_cli_input`] fills in [`DEFAULT_BOARD`].
     pub boards: Vec<String>,
     pub description: String,
-    pub priority: u8,
+    /// Priority from a `p:` token, if one was given.
+    pub priority: Option<Priority>,
     pub tags: Vec<String>,
-    /// Due date as local-midnight epoch millis (from a `due:` token).
+    /// Due date as epoch millis (from a `due:` token).
     pub due_date: Option<i64>,
 }
 
-/// Errors from parsing CLI create input.
+/// Errors from parsing item-creation input.
 #[derive(Debug, PartialEq, Eq)]
 pub enum CliParseError {
     /// The value after `due:` was not a valid date.
     InvalidDueDate(String),
+    /// A `p:` token did not name a valid priority.
+    InvalidPriority(ParsePriorityError),
 }
 
-/// Parse CLI input words into a [`ParsedInput`].
+impl std::fmt::Display for CliParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CliParseError::InvalidDueDate(raw) => {
+                write!(f, "{}", due::invalid_due_date_message(raw))
+            }
+            CliParseError::InvalidPriority(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl std::error::Error for CliParseError {}
+
+/// Parse item-creation words into a [`ParsedInput`], leaving `boards` empty
+/// when none are named.
 ///
-/// Words starting with `@` (and longer than 1 char) are treated as board names.
-/// Words starting with `+` (and longer than 1 char) are treated as tags.
-/// Words matching `p:1`, `p:2`, `p:3` set priority.
-/// Words starting with `due:` set the due date (`YYYY-MM-DD`, `YYYY-MM-DDTHH:MM`,
-/// `today`, `tomorrow`, `now`, or `today+HHMM` / `tomorrow+HHMM` / `now+HHMM`).
-/// (A `due:` token cannot contain a space, so use the `T` separator for a time.)
-/// Everything else is the description.
-///
-/// If no boards are found, defaults to [`DEFAULT_BOARD`].
-pub fn parse_cli_input(input: &[String]) -> Result<ParsedInput, CliParseError> {
-    let mut boards = Vec::new();
-    let mut tags = Vec::new();
+/// - `@name` (longer than 1 char) names a board.
+/// - `+name` (longer than 1 char) adds a tag.
+/// - `p:N` sets priority (`p:1` = high, `p:2` = medium, `p:3` = normal; the
+///   labels `p:high` etc. also work). Any other `p:` value is an error.
+/// - `due:VALUE` sets the due date (`YYYY-MM-DD`, `YYYY-MM-DDTHH:MM`,
+///   `today`, `tomorrow`, `now`, or `today+HHMM` / `tomorrow+HHMM` /
+///   `now+HHMM`). A `due:` token cannot contain a space, so use the `T`
+///   separator for a time.
+/// - Everything else is the description.
+pub fn parse_item_input<S: AsRef<str>>(input: &[S]) -> Result<ParsedInput, CliParseError> {
+    let mut boards: Vec<String> = Vec::new();
+    let mut tags: Vec<String> = Vec::new();
     let mut desc = Vec::new();
-    let mut priority: u8 = 1;
+    let mut priority = None;
     let mut due_date: Option<i64> = None;
 
     for word in input {
-        if is_priority_opt(word) {
-            if let Ok(p) = word.trim_start_matches("p:").parse::<u8>() {
-                priority = p;
-            }
+        let word = word.as_ref();
+        if word.starts_with("p:") {
+            priority = Some(word.parse().map_err(CliParseError::InvalidPriority)?);
         } else if let Some(value) = word.strip_prefix("due:") {
-            match crate::due::parse_due_date(value) {
+            match due::parse_due_date(value) {
                 Some(millis) => due_date = Some(millis),
                 None => return Err(CliParseError::InvalidDueDate(value.to_string())),
             }
         } else if word.starts_with('@') && word.len() > 1 {
-            boards.push(normalize_board_name(word));
+            let board = normalize_board_name(word);
+            if !boards.iter().any(|b| board_eq(b, &board)) {
+                boards.push(board);
+            }
         } else if word.starts_with('+') && word.len() > 1 {
             let tag = normalize_tag(word);
-            if !tags.iter().any(|t: &String| t.eq_ignore_ascii_case(&tag)) {
+            if !tags.iter().any(|t| t.eq_ignore_ascii_case(&tag)) {
                 tags.push(tag);
             }
         } else {
-            desc.push(word.clone());
-        }
-    }
-
-    if boards.is_empty() {
-        boards.push(DEFAULT_BOARD.to_string());
-    }
-
-    // Deduplicate boards (case-insensitive)
-    let mut deduped: Vec<String> = Vec::new();
-    for board in boards {
-        if !deduped.iter().any(|b| board_eq(b, &board)) {
-            deduped.push(board);
+            desc.push(word);
         }
     }
 
     Ok(ParsedInput {
-        boards: deduped,
+        boards,
         description: desc.join(" "),
         priority,
         tags,
         due_date,
     })
+}
+
+/// Like [`parse_item_input`], defaulting to [`DEFAULT_BOARD`] when no board
+/// is named.
+pub fn parse_cli_input<S: AsRef<str>>(input: &[S]) -> Result<ParsedInput, CliParseError> {
+    let mut parsed = parse_item_input(input)?;
+    if parsed.boards.is_empty() {
+        parsed.boards.push(DEFAULT_BOARD.to_string());
+    }
+    Ok(parsed)
 }
 
 /// Normalize a raw tag name: strip leading `+`, trim whitespace, lowercase.
@@ -128,10 +150,6 @@ pub fn normalize_tag(raw: &str) -> String {
 /// Format a tag for display with `+` prefix.
 pub fn display_tag(tag: &str) -> String {
     format!("+{}", tag)
-}
-
-fn is_priority_opt(s: &str) -> bool {
-    matches!(s, "p:1" | "p:2" | "p:3")
 }
 
 /// Deserialize a list of board names, normalizing each one.
@@ -204,7 +222,7 @@ mod tests {
         let parsed = parse_cli_input(&input).unwrap();
         assert_eq!(parsed.boards, vec!["coding"]);
         assert_eq!(parsed.description, "Fix bug");
-        assert_eq!(parsed.priority, 1);
+        assert_eq!(parsed.priority, None);
         assert!(parsed.tags.is_empty());
         assert_eq!(parsed.due_date, None);
     }
@@ -215,7 +233,7 @@ mod tests {
         let parsed = parse_cli_input(&input).unwrap();
         assert_eq!(parsed.boards, vec!["coding"]);
         assert_eq!(parsed.description, "Fix bug");
-        assert_eq!(parsed.priority, 3);
+        assert_eq!(parsed.priority, Some(Priority::Normal));
     }
 
     #[test]
@@ -224,7 +242,7 @@ mod tests {
         let parsed = parse_cli_input(&input).unwrap();
         assert_eq!(parsed.boards, vec![DEFAULT_BOARD]);
         assert_eq!(parsed.description, "Simple task");
-        assert_eq!(parsed.priority, 1);
+        assert_eq!(parsed.priority, None);
     }
 
     #[test]
@@ -240,8 +258,31 @@ mod tests {
         for p in 1..=3u8 {
             let input: Vec<String> = vec!["task".into(), format!("p:{p}")];
             let parsed = parse_cli_input(&input).unwrap();
-            assert_eq!(parsed.priority, p, "expected priority {p}");
+            assert_eq!(
+                parsed.priority,
+                Priority::from_level(p),
+                "expected priority {p}"
+            );
         }
+        let parsed = parse_cli_input(&["task", "p:high"]).unwrap();
+        assert_eq!(parsed.priority, Some(Priority::High));
+    }
+
+    #[test]
+    fn test_parse_cli_input_invalid_priority_errors() {
+        for bad in ["p:4", "p:0", "p:", "p:urgent"] {
+            let err = parse_cli_input(&["task", bad]).unwrap_err();
+            assert!(
+                matches!(err, CliParseError::InvalidPriority(_)),
+                "{bad} should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn test_parse_item_input_leaves_boards_empty() {
+        let parsed = parse_item_input(&["task"]).unwrap();
+        assert!(parsed.boards.is_empty());
     }
 
     #[test]

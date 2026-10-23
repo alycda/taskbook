@@ -8,19 +8,19 @@ Taskbook is a CLI application for managing tasks and notes organized into boards
 
 ```bash
 # Create a task
-tb --task "Review pull request"
+tb task "Review pull request"
 
 # Create a task in a specific board with priority
-tb --task @work "Deploy to production" p:3
+tb task @work "Deploy to production" p:1
 
 # View your boards
 tb
 
 # Mark task as complete
-tb --check 1
+tb check 1
 
 # Start working on a task
-tb --begin 2
+tb begin 2
 ```
 
 ## Documentation
@@ -29,6 +29,7 @@ tb --begin 2
 |----------|-------------|
 | [Installation](installation.md) | How to install the client and server |
 | [CLI Reference](cli-reference.md) | Complete command reference |
+| [Upgrading to 2.0](upgrading-to-2.0.md) | Breaking changes from 1.x and the Node.js taskbook |
 | [Configuration](configuration.md) | Client configuration options |
 | [Server Setup](server.md) | Running the sync server |
 | [Sync & Encryption](sync.md) | Setting up sync between devices |

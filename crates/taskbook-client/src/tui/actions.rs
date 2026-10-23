@@ -1,8 +1,9 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::editor;
-use crate::error::Result;
-use taskbook_common::board;
+use crate::error::{Result, TaskbookError};
+use crate::taskbook::{NewNote, NewTask};
+use taskbook_common::{board, Priority};
 
 use super::app::{App, PendingAction, PopupState, StatusKind, ViewMode};
 use super::autocomplete;
@@ -48,10 +49,12 @@ fn handle_confirm_key(app: &mut App, key: KeyEvent) -> Result<()> {
             if let Some(action) = app.command_line.pending_confirm.take() {
                 match action {
                     PendingAction::Delete { ids } => {
-                        delete_items(app, &ids)?;
+                        let result = delete_items(app, &ids);
+                        report(app, result)?;
                     }
                     PendingAction::Clear => {
-                        clear_completed(app)?;
+                        let result = clear_completed(app);
+                        report(app, result)?;
                     }
                 }
             }
@@ -177,10 +180,15 @@ fn accept_suggestion(app: &mut App) {
     }
 }
 
-/// Parse and execute the command line input
+/// Parse and execute the command line input. Parse and operation errors
+/// (unknown id, note given a priority, ...) go to the status bar instead of
+/// ending the TUI.
 fn execute_input(app: &mut App, input: &str) -> Result<()> {
     match command_parser::parse_command(input) {
-        Ok(cmd) => execute_command(app, cmd),
+        Ok(cmd) => {
+            let result = execute_command(app, cmd);
+            report(app, result)
+        }
         Err(e) => {
             app.set_status(e.message, StatusKind::Error);
             Ok(())
@@ -188,58 +196,66 @@ fn execute_input(app: &mut App, input: &str) -> Result<()> {
     }
 }
 
+/// Explicit boards, else the filtered board, else the default board.
+fn target_boards(app: &App, boards: Vec<String>) -> Vec<String> {
+    if !boards.is_empty() {
+        return boards;
+    }
+    vec![app
+        .filter
+        .board_filter
+        .clone()
+        .unwrap_or_else(|| board::DEFAULT_BOARD.to_string())]
+}
+
+fn describe_boards(boards: &[String]) -> String {
+    boards
+        .iter()
+        .map(|b| board::display_name(&board::normalize_board_name(b)))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// Execute a parsed command
 fn execute_command(app: &mut App, cmd: ParsedCommand) -> Result<()> {
     match cmd {
         ParsedCommand::Task {
-            board,
+            boards,
             description,
             priority,
             tags,
             due_date,
         } => {
-            let board_name = board
-                .map(|b| board::normalize_board_name(&b))
-                .or_else(|| app.filter.board_filter.clone())
-                .unwrap_or_else(|| "my board".to_string());
-            app.taskbook.create_task_direct_with_tags(
-                vec![board_name.clone()],
+            let boards = target_boards(app, boards);
+            let display = describe_boards(&boards);
+            app.taskbook.create_task(NewTask {
+                boards,
                 description,
                 priority,
                 tags,
                 due_date,
-            )?;
+            })?;
             app.refresh_items()?;
-            let display = board::display_name(&board_name);
             app.set_status(format!("Task created in {}", display), StatusKind::Success);
         }
         ParsedCommand::Note {
-            board,
+            boards,
             description,
             tags,
         } => {
-            let board_name = board
-                .map(|b| board::normalize_board_name(&b))
-                .or_else(|| app.filter.board_filter.clone())
-                .unwrap_or_else(|| "my board".to_string());
-            app.taskbook.create_note_direct_with_tags(
-                vec![board_name.clone()],
-                description,
+            let boards = target_boards(app, boards);
+            let display = describe_boards(&boards);
+            let id = app.taskbook.create_note(NewNote {
+                boards,
+                title: description,
+                body: None,
                 tags,
-            )?;
+            })?;
             app.refresh_items()?;
-            let display = board::display_name(&board_name);
             app.set_status(format!("Note created in {}", display), StatusKind::Success);
 
             // Open editor for the newly created note
-            // Find the highest ID note (just created)
-            if let Some(max_id) = app.items.values().map(|i| i.id()).max() {
-                if let Some(item) = app.items.get(&max_id.to_string()) {
-                    if !item.is_task() {
-                        edit_note_external(app, max_id)?;
-                    }
-                }
-            }
+            edit_note_external(app, id)?;
         }
         ParsedCommand::Edit { id, description } => {
             edit_description(app, id, &description)?;
@@ -251,6 +267,7 @@ fn execute_command(app: &mut App, cmd: ParsedCommand) -> Result<()> {
             app.command_line.pending_confirm = Some(PendingAction::Delete { ids });
         }
         ParsedCommand::Search { term } => {
+            app.filter.id_filter = None;
             app.filter.search_term = Some(term.clone());
             app.update_display_order();
             app.selected_index = 0;
@@ -260,24 +277,27 @@ fn execute_command(app: &mut App, cmd: ParsedCommand) -> Result<()> {
                 StatusKind::Info,
             );
         }
+        ParsedCommand::Show { ids } => {
+            let unknown: Vec<u64> = ids
+                .iter()
+                .copied()
+                .filter(|id| !app.items.contains_key(&id.to_string()))
+                .collect();
+            if !unknown.is_empty() {
+                return Err(TaskbookError::UnknownIds(unknown));
+            }
+            app.clear_board_filter();
+            app.filter.search_term = None;
+            app.filter.id_filter = Some(ids);
+            app.update_display_order();
+            app.selected_index = 0;
+        }
         ParsedCommand::Priority { id, level } => {
             set_priority(app, id, level)?;
         }
-        ParsedCommand::Check { ids } => {
-            for id in &ids {
-                toggle_check(app, *id)?;
-            }
-        }
-        ParsedCommand::Star { ids } => {
-            for id in &ids {
-                toggle_star(app, *id)?;
-            }
-        }
-        ParsedCommand::Begin { ids } => {
-            for id in &ids {
-                toggle_begin(app, *id)?;
-            }
-        }
+        ParsedCommand::Check { ids } => toggle_check(app, &ids)?,
+        ParsedCommand::Star { ids } => toggle_star(app, &ids)?,
+        ParsedCommand::Begin { ids } => toggle_begin(app, &ids)?,
         ParsedCommand::Tag { id, add, remove } => {
             update_tags(app, id, &add, &remove)?;
         }
@@ -351,7 +371,12 @@ fn handle_shortcut_key(app: &mut App, key: KeyEvent) -> Result<()> {
         // Quit
         KeyCode::Char('q') => app.quit(),
         KeyCode::Esc => {
-            if app.filter.search_term.is_some() {
+            if app.filter.id_filter.is_some() {
+                app.filter.id_filter = None;
+                app.update_display_order();
+                app.selected_index = 0;
+                app.set_status("Showing all items".to_string(), StatusKind::Info);
+            } else if app.filter.search_term.is_some() {
                 app.filter.search_term = None;
                 app.update_display_order();
                 app.selected_index = 0;
@@ -380,7 +405,9 @@ fn handle_shortcut_key(app: &mut App, key: KeyEvent) -> Result<()> {
         KeyCode::Enter => {
             if let Some(item) = app.selected_item() {
                 if !item.is_task() {
-                    edit_note_external(app, item.id())?;
+                    let id = item.id();
+                    let result = edit_note_external(app, id);
+                    report(app, result)?;
                 } else if app.view == ViewMode::Board && app.filter.board_filter.is_none() {
                     if let Some(board_name) = app.get_board_for_selected() {
                         let display = board::display_name(&board_name);
@@ -441,19 +468,19 @@ fn handle_shortcut_key(app: &mut App, key: KeyEvent) -> Result<()> {
             if let Some(item) = app.selected_item() {
                 let id = item.id();
                 let desc = item.description().to_string();
-                app.activate_command_line(&format!("/edit @{} {}", id, desc));
+                app.activate_command_line(&format!("/edit {} {}", id, desc));
             }
         }
         KeyCode::Char('m') if app.view != ViewMode::Archive => {
             if let Some(id) = app.selected_id() {
-                app.activate_command_line(&format!("/move @{} @", id));
+                app.activate_command_line(&format!("/move {} @", id));
                 autocomplete::update_suggestions(app);
             }
         }
         KeyCode::Char('p') if app.view != ViewMode::Archive => {
             if let Some(item) = app.selected_item() {
                 if item.is_task() {
-                    app.activate_command_line(&format!("/priority @{} ", item.id()));
+                    app.activate_command_line(&format!("/priority {} ", item.id()));
                 }
             }
         }
@@ -469,27 +496,32 @@ fn handle_shortcut_key(app: &mut App, key: KeyEvent) -> Result<()> {
         // Direct action shortcuts (no command line needed)
         KeyCode::Char('c') if app.view != ViewMode::Archive => {
             if let Some(id) = app.selected_id() {
-                toggle_check(app, id)?;
+                let result = toggle_check(app, &[id]);
+                report(app, result)?;
             }
         }
         KeyCode::Char('b') if app.view != ViewMode::Archive => {
             if let Some(id) = app.selected_id() {
-                toggle_begin(app, id)?;
+                let result = toggle_begin(app, &[id]);
+                report(app, result)?;
             }
         }
         KeyCode::Char('s') if app.view != ViewMode::Archive => {
             if let Some(id) = app.selected_id() {
-                toggle_star(app, id)?;
+                let result = toggle_star(app, &[id]);
+                report(app, result)?;
             }
         }
         KeyCode::Char('r') if app.view == ViewMode::Archive => {
             if let Some(id) = app.selected_id() {
-                restore_item(app, id)?;
+                let result = restore_item(app, id);
+                report(app, result)?;
             }
         }
         KeyCode::Char('y') => {
             if let Some(id) = app.selected_id() {
-                copy_to_clipboard(app, id)?;
+                let result = copy_to_clipboard(app, id);
+                report(app, result)?;
             }
         }
 
@@ -520,87 +552,117 @@ fn handle_shortcut_key(app: &mut App, key: KeyEvent) -> Result<()> {
 
 // Action implementations
 
-fn toggle_check(app: &mut App, id: u64) -> Result<()> {
-    if let Some(item) = app.items.get(&id.to_string()) {
-        if item.is_task() {
-            app.taskbook.check_tasks_silent(&[id])?;
-            app.refresh_items()?;
-            app.set_status(format!("Toggled task {}", id), StatusKind::Success);
+/// Show an operation error in the status bar instead of ending the TUI.
+/// Terminal failures (`TaskbookError::Tui`) still propagate: the TUI cannot
+/// keep running without a working terminal.
+pub fn report(app: &mut App, result: Result<()>) -> Result<()> {
+    match result {
+        Err(e @ TaskbookError::Tui(_)) => Err(e),
+        Err(e) => {
+            app.set_status(e.to_string(), StatusKind::Error);
+            Ok(())
         }
+        Ok(()) => Ok(()),
     }
-    Ok(())
 }
 
-fn toggle_begin(app: &mut App, id: u64) -> Result<()> {
-    if let Some(item) = app.items.get(&id.to_string()) {
-        if item.is_task() {
-            app.taskbook.begin_tasks_silent(&[id])?;
-            app.refresh_items()?;
-            app.set_status(
-                format!("Toggled in-progress for task {}", id),
-                StatusKind::Success,
-            );
-        }
-    }
-    Ok(())
+fn join_ids(ids: &[u64]) -> String {
+    ids.iter()
+        .map(u64::to_string)
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
-fn toggle_star(app: &mut App, id: u64) -> Result<()> {
-    app.taskbook.star_items_silent(&[id])?;
+fn toggle_check(app: &mut App, ids: &[u64]) -> Result<()> {
+    let out = app.taskbook.toggle_check(ids)?;
     app.refresh_items()?;
-    app.set_status(format!("Toggled star for item {}", id), StatusKind::Success);
+    let mut parts = Vec::new();
+    if !out.on.is_empty() {
+        parts.push(format!("checked {}", join_ids(&out.on)));
+    }
+    if !out.off.is_empty() {
+        parts.push(format!("unchecked {}", join_ids(&out.off)));
+    }
+    app.set_status(format!("Tasks {}", parts.join(", ")), StatusKind::Success);
+    Ok(())
+}
+
+fn toggle_begin(app: &mut App, ids: &[u64]) -> Result<()> {
+    let out = app.taskbook.toggle_begin(ids)?;
+    app.refresh_items()?;
+    let mut parts = Vec::new();
+    if !out.on.is_empty() {
+        parts.push(format!("started {}", join_ids(&out.on)));
+    }
+    if !out.off.is_empty() {
+        parts.push(format!("paused {}", join_ids(&out.off)));
+    }
+    app.set_status(format!("Tasks {}", parts.join(", ")), StatusKind::Success);
+    Ok(())
+}
+
+fn toggle_star(app: &mut App, ids: &[u64]) -> Result<()> {
+    let out = app.taskbook.toggle_star(ids)?;
+    app.refresh_items()?;
+    let mut parts = Vec::new();
+    if !out.on.is_empty() {
+        parts.push(format!("starred {}", join_ids(&out.on)));
+    }
+    if !out.off.is_empty() {
+        parts.push(format!("unstarred {}", join_ids(&out.off)));
+    }
+    app.set_status(format!("Items {}", parts.join(", ")), StatusKind::Success);
     Ok(())
 }
 
 fn edit_description(app: &mut App, id: u64, new_desc: &str) -> Result<()> {
-    app.taskbook.edit_description_silent(id, new_desc)?;
+    app.taskbook.edit_description(id, new_desc.to_string())?;
     app.refresh_items()?;
     app.set_status(format!("Updated item {}", id), StatusKind::Success);
     Ok(())
 }
 
 fn move_to_board(app: &mut App, id: u64, board: &str) -> Result<()> {
-    let board_name = board::normalize_board_name(board);
-    app.taskbook
-        .move_boards_silent(id, vec![board_name.clone()])?;
+    let boards = app
+        .taskbook
+        .move_to_boards(&[id], vec![board.to_string()])?;
     app.refresh_items()?;
-    let display = board::display_name(&board_name);
     app.set_status(
-        format!("Moved item {} to {}", id, display),
+        format!("Moved item {} to {}", id, describe_boards(&boards)),
         StatusKind::Success,
     );
     Ok(())
 }
 
-fn set_priority(app: &mut App, id: u64, priority: u8) -> Result<()> {
-    app.taskbook.update_priority_silent(id, priority)?;
+fn set_priority(app: &mut App, id: u64, priority: Priority) -> Result<()> {
+    app.taskbook.set_priority(&[id], priority)?;
     app.refresh_items()?;
     app.set_status(
-        format!("Set priority {} for task {}", priority, id),
+        format!("Set priority of task {} to {}", id, priority),
         StatusKind::Success,
     );
     Ok(())
 }
 
 fn delete_items(app: &mut App, ids: &[u64]) -> Result<()> {
-    app.taskbook.delete_items_silent(ids)?;
+    let deleted = app.taskbook.delete(ids)?;
     app.refresh_items()?;
     app.set_status(
-        format!("Deleted {} item(s)", ids.len()),
+        format!("Deleted {} item(s)", deleted.len()),
         StatusKind::Success,
     );
     Ok(())
 }
 
 fn restore_item(app: &mut App, id: u64) -> Result<()> {
-    app.taskbook.restore_items_silent(&[id])?;
+    app.taskbook.restore(&[id])?;
     app.set_view(ViewMode::Archive)?;
     app.set_status(format!("Restored item {}", id), StatusKind::Success);
     Ok(())
 }
 
 fn copy_to_clipboard(app: &mut App, id: u64) -> Result<()> {
-    app.taskbook.copy_to_clipboard_silent(&[id])?;
+    app.taskbook.copy_to_clipboard(&[id])?;
     app.set_status(
         format!("Copied item {} to clipboard", id),
         StatusKind::Success,
@@ -609,7 +671,8 @@ fn copy_to_clipboard(app: &mut App, id: u64) -> Result<()> {
 }
 
 fn update_tags(app: &mut App, id: u64, add: &[String], remove: &[String]) -> Result<()> {
-    app.taskbook.update_tags_silent(id, add, remove)?;
+    app.taskbook
+        .update_tags(&[id], add.to_vec(), remove.to_vec())?;
     app.refresh_items()?;
     let mut parts = Vec::new();
     if !add.is_empty() {
@@ -636,7 +699,7 @@ fn update_tags(app: &mut App, id: u64, add: &[String], remove: &[String]) -> Res
 }
 
 fn clear_completed(app: &mut App) -> Result<()> {
-    let count = app.taskbook.clear_silent()?;
+    let count = app.taskbook.clear_completed()?.len();
     app.refresh_items()?;
     app.set_status(
         format!("Cleared {} completed task(s)", count),
@@ -647,7 +710,7 @@ fn clear_completed(app: &mut App) -> Result<()> {
 
 fn rename_board(app: &mut App, old_name: &str, new_name: &str) -> Result<()> {
     let new_board = board::normalize_board_name(new_name);
-    let count = app.taskbook.rename_board_silent(old_name, &new_board)?;
+    let count = app.taskbook.rename_board(old_name, &new_board)?;
 
     if let Some(ref filter) = app.filter.board_filter {
         if board::board_eq(filter, old_name) {
@@ -696,8 +759,7 @@ fn edit_note_external(app: &mut App, id: u64) -> Result<()> {
     match content? {
         Some(note_content) => {
             app.taskbook
-                .edit_description_silent(id, &note_content.title)?;
-            app.taskbook.edit_note_body_silent(id, note_content.body)?;
+                .set_note_content(id, note_content.title, note_content.body)?;
             app.refresh_items()?;
             app.set_status(format!("Updated note {}", id), StatusKind::Success);
         }

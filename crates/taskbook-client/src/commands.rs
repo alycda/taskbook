@@ -1,139 +1,354 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use base64::Engine;
 use colored::Colorize;
 
 use crate::api_client::{ApiClient, EncryptedItemData};
+use crate::auth;
+use crate::cli::{Cli, Command};
 use crate::config::Config;
 use crate::credentials::Credentials;
 use crate::directory::resolve_taskbook_directory;
+use crate::editor;
 use crate::error::{Result, TaskbookError};
+use crate::mcp;
+use crate::render::{Render, Stats};
 use crate::storage::{LocalStorage, StorageBackend};
-use crate::taskbook::Taskbook;
+use crate::taskbook::{Items, NewNote, NewTask, Taskbook};
+use crate::tui;
 use taskbook_common::encryption::encrypt_item;
+use taskbook_common::{board, due, id, Priority, StorageItem};
 
-/// Execute CLI commands
-#[allow(clippy::too_many_arguments)]
-pub fn run(
-    input: Vec<String>,
-    archive: bool,
-    task: bool,
-    restore: bool,
-    note: bool,
-    delete: bool,
-    check: bool,
-    begin: bool,
-    star: bool,
-    priority: bool,
-    due: bool,
-    copy: bool,
-    timeline: bool,
-    find: bool,
-    list: bool,
-    edit: bool,
-    edit_note: bool,
-    r#move: bool,
-    clear: bool,
-    tag: bool,
-    taskbook_dir: Option<PathBuf>,
-) -> Result<()> {
-    let taskbook = Taskbook::new(taskbook_dir.as_deref())?;
+/// Execute a parsed command line.
+pub fn run(cli: Cli) -> Result<()> {
+    let dir = cli.taskbook_dir;
+    let Some(command) = cli.command else {
+        return tui::run(dir.as_deref());
+    };
 
-    if archive {
-        return taskbook.display_archive();
-    }
-
-    if task {
-        return taskbook.create_task(&input);
-    }
-
-    if restore {
-        let ids: Vec<u64> = input.iter().filter_map(|s| s.parse().ok()).collect();
-        return taskbook.restore_items(&ids);
-    }
-
-    if note {
-        // If no description provided, open external editor
-        if input.is_empty() {
-            return taskbook.create_note_with_editor();
+    match command {
+        Command::Register {
+            server,
+            username,
+            email,
+            password,
+        } => auth::register(
+            server.as_deref(),
+            username.as_deref(),
+            email.as_deref(),
+            password.as_deref(),
+        ),
+        Command::Login {
+            server,
+            username,
+            password,
+            key,
+        } => auth::login(
+            server.as_deref(),
+            username.as_deref(),
+            password.as_deref(),
+            key.as_deref(),
+        ),
+        Command::Logout => auth::logout(),
+        Command::Status => auth::status(),
+        Command::Migrate => migrate(dir),
+        Command::Mcp => mcp::run(dir.as_deref()),
+        command => {
+            let config = Config::load_or_default();
+            let taskbook = Taskbook::from_config(&config, dir.as_deref())?;
+            let render = Render::new(config);
+            run_item_command(&taskbook, &render, command)
         }
-        return taskbook.create_note(&input);
+    }
+}
+
+fn run_item_command(tb: &Taskbook, render: &Render, command: Command) -> Result<()> {
+    match command {
+        Command::Board => {
+            let data = tb.items()?;
+            show_boards(render, &data, None, Some(&data));
+        }
+        Command::Timeline => {
+            let data = tb.items()?;
+            render.display_by_date(&group_by_date(&data));
+            render.display_stats(&Stats::from_items(data.values()));
+        }
+        Command::Archive => render.display_by_date(&group_by_date(&tb.archived_items()?)),
+        Command::Show { ids, archived } => {
+            for item in tb.get(&ids, archived)? {
+                render.display_details(&item);
+            }
+            println!();
+        }
+        Command::Task { input } => {
+            let parsed = board::parse_cli_input(&input)?;
+            let id = tb.create_task(NewTask {
+                boards: parsed.boards,
+                description: parsed.description,
+                priority: parsed.priority.unwrap_or_default(),
+                tags: parsed.tags,
+                due_date: parsed.due_date,
+            })?;
+            render.success_create(id, true);
+        }
+        Command::Note { input } if input.is_empty() => match editor::create_note_in_editor()? {
+            Some(content) => {
+                let id = tb.create_note(NewNote {
+                    title: content.title,
+                    body: content.body,
+                    ..NewNote::default()
+                })?;
+                render.success_create(id, false);
+            }
+            None => render.note_cancelled(),
+        },
+        Command::Note { input } => {
+            let parsed = board::parse_cli_input(&input)?;
+            if parsed.priority.is_some() {
+                return Err(TaskbookError::NoteField("priority"));
+            }
+            if parsed.due_date.is_some() {
+                return Err(TaskbookError::NoteField("due date"));
+            }
+            let id = tb.create_note(NewNote {
+                boards: parsed.boards,
+                title: parsed.description,
+                body: None,
+                tags: parsed.tags,
+            })?;
+            render.success_create(id, false);
+        }
+        Command::Check { ids } => {
+            let out = tb.toggle_check(&ids)?;
+            render.mark_complete(&out.on);
+            render.mark_incomplete(&out.off);
+        }
+        Command::Begin { ids } => {
+            let out = tb.toggle_begin(&ids)?;
+            render.mark_started(&out.on);
+            render.mark_paused(&out.off);
+        }
+        Command::Star { ids } => {
+            let out = tb.toggle_star(&ids)?;
+            render.mark_starred(&out.on);
+            render.mark_unstarred(&out.off);
+        }
+        Command::Delete { ids } => render.success_delete(&tb.delete(&ids)?),
+        Command::Restore { ids } => render.success_restore(&tb.restore(&ids)?),
+        Command::Copy { ids } => render.success_copy_to_clipboard(&tb.copy_to_clipboard(&ids)?),
+        Command::Edit { id, description } => {
+            tb.edit_description(id, description.join(" "))?;
+            render.success_edit(id);
+        }
+        Command::EditNote { id } => {
+            let (title, body) = tb.note_content(id)?;
+            match editor::edit_existing_note_in_editor(&title, body.as_deref())? {
+                Some(content) => {
+                    tb.set_note_content(id, content.title, content.body)?;
+                    render.success_edit(id);
+                }
+                None => render.note_cancelled(),
+            }
+        }
+        Command::Move { args } => {
+            let (ids, boards) = id::split_leading_ids(&args)?;
+            let boards = tb.move_to_boards(&ids, boards.to_vec())?;
+            render.success_move(&ids, &boards);
+        }
+        Command::Priority { args } => {
+            let (level, ids) = match args.split_last() {
+                Some((level, ids)) if !ids.is_empty() => (level, ids),
+                _ => return Err(TaskbookError::Usage("tb priority <ID>... <LEVEL>")),
+            };
+            let priority: Priority = level.parse()?;
+            let ids = id::parse_ids(ids)?;
+            tb.set_priority(&ids, priority)?;
+            render.success_priority(&ids, priority);
+        }
+        Command::Due { args } => {
+            let (ids, value) = id::split_leading_ids(&args)?;
+            let due_date = parse_due_value(&value.join(" "))?;
+            tb.set_due_date(&ids, due_date)?;
+            render.success_due_date(&ids, due_date);
+        }
+        Command::Tag { args } => {
+            let (ids, tokens) = id::split_leading_ids(&args)?;
+            let (mut add, mut remove) = (Vec::new(), Vec::new());
+            for token in tokens {
+                if let Some(tag) = token.strip_prefix('+').filter(|t| !t.is_empty()) {
+                    add.push(tag.to_string());
+                } else if let Some(tag) = token.strip_prefix('-').filter(|t| !t.is_empty()) {
+                    remove.push(tag.to_string());
+                } else {
+                    return Err(TaskbookError::InvalidTag(token.clone()));
+                }
+            }
+            let (added, removed) = tb.update_tags(&ids, add, remove)?;
+            render.success_tag(&ids, &added, &removed);
+        }
+        Command::Find { terms } => {
+            let mut data = tb.items()?;
+            data.retain(|_, item| item_matches_terms(item, &terms));
+            show_boards(render, &data, None, None);
+        }
+        Command::List { filters } => {
+            let all = tb.items()?;
+            let mut data = all.clone();
+            let known_boards = Taskbook::boards_of(&all);
+            let boards = apply_list_filters(&mut data, &filters, &known_boards)?;
+            show_boards(render, &data, boards, Some(&all));
+        }
+        Command::Clear => {
+            let ids = tb.clear_completed()?;
+            if ids.is_empty() {
+                render.nothing_to_clear();
+            } else {
+                render.success_clear(&ids);
+            }
+        }
+        Command::Register { .. }
+        | Command::Login { .. }
+        | Command::Logout
+        | Command::Status
+        | Command::Migrate
+        | Command::Mcp => unreachable!("handled in run"),
+    }
+    Ok(())
+}
+
+/// Render `data` grouped by board (all of its boards, or just `only`), then
+/// the progress stats of `stats_of` when given.
+fn show_boards(render: &Render, data: &Items, only: Option<Vec<String>>, stats_of: Option<&Items>) {
+    let boards = only.unwrap_or_else(|| Taskbook::boards_of(data));
+    render.display_by_board(&group_by_board(data, &boards));
+    if let Some(all) = stats_of {
+        render.display_stats(&Stats::from_items(all.values()));
+    }
+}
+
+fn parse_due_value(raw: &str) -> Result<Option<i64>> {
+    match raw.trim() {
+        "" => Err(TaskbookError::MissingDueDate),
+        none if none.eq_ignore_ascii_case("none") => Ok(None),
+        value => due::parse_due_date(value)
+            .map(Some)
+            .ok_or_else(|| TaskbookError::InvalidDueDate(value.to_string())),
+    }
+}
+
+/// True when any term matches the item: `+tag` terms match tags; other terms
+/// match the description, note body or tags (case-insensitive substring).
+fn item_matches_terms(item: &StorageItem, terms: &[String]) -> bool {
+    terms.iter().any(|term| {
+        let term = term.to_lowercase();
+        let in_tags = |q: &str| item.tags().iter().any(|t| t.to_lowercase().contains(q));
+        match term.strip_prefix('+') {
+            Some(tag) if !tag.is_empty() => in_tags(tag),
+            _ => {
+                item.description().to_lowercase().contains(&term)
+                    || item
+                        .note_body()
+                        .is_some_and(|b| b.to_lowercase().contains(&term))
+                    || in_tags(&term)
+            }
+        }
+    })
+}
+
+/// Item predicates for `tb list`.
+fn list_attribute(name: &str) -> Option<fn(&StorageItem) -> bool> {
+    let pred: fn(&StorageItem) -> bool = match name {
+        "star" | "starred" => |i| i.is_starred(),
+        "done" | "checked" | "complete" => |i| i.as_task().is_some_and(|t| t.is_complete),
+        "progress" | "started" | "begun" | "in_progress" => {
+            |i| i.as_task().is_some_and(|t| t.in_progress)
+        }
+        "pending" | "unchecked" | "incomplete" => |i| {
+            i.as_task()
+                .is_some_and(|t| !t.is_complete && !t.in_progress)
+        },
+        "todo" | "task" | "tasks" => |i| i.is_task(),
+        "note" | "notes" => |i| !i.is_task(),
+        _ => return None,
+    };
+    Some(pred)
+}
+
+/// Apply `tb list` filters to `data` (every filter must match). Returns the
+/// boards to display when any were named.
+///
+/// A term is, in order: `+tag`; `@board`; a state/type attribute; or a bare
+/// name of an existing board. Anything else is an error, as is an `@board`
+/// that does not exist.
+fn apply_list_filters(
+    data: &mut Items,
+    filters: &[String],
+    known_boards: &[String],
+) -> Result<Option<Vec<String>>> {
+    let find_board = |name: &str| {
+        let normalized = board::normalize_board_name(name);
+        known_boards
+            .iter()
+            .find(|b| board::board_eq(b, &normalized))
+            .cloned()
+    };
+
+    let mut boards: Vec<String> = Vec::new();
+    let mut add_board = |b: String| {
+        if !boards.iter().any(|existing| board::board_eq(existing, &b)) {
+            boards.push(b);
+        }
+    };
+    for term in filters {
+        if let Some(tag) = term.strip_prefix('+').filter(|t| !t.is_empty()) {
+            let tag = board::normalize_tag(tag);
+            data.retain(|_, item| item.tags().iter().any(|t| t.eq_ignore_ascii_case(&tag)));
+        } else if term.starts_with('@') && term.len() > 1 {
+            let b = find_board(term).ok_or_else(|| {
+                TaskbookError::UnknownBoard(board::display_name(&board::normalize_board_name(term)))
+            })?;
+            add_board(b);
+        } else if let Some(pred) = list_attribute(&term.to_lowercase()) {
+            data.retain(|_, item| pred(item));
+        } else if let Some(b) = find_board(term) {
+            add_board(b);
+        } else {
+            return Err(TaskbookError::UnknownFilter(term.clone()));
+        }
     }
 
-    if edit_note {
-        return taskbook.edit_note_in_editor(&input);
+    if boards.is_empty() {
+        return Ok(None);
     }
+    Ok(Some(boards))
+}
 
-    if delete {
-        let ids: Vec<u64> = input.iter().filter_map(|s| s.parse().ok()).collect();
-        return taskbook.delete_items(&ids);
+fn group_by_board<'a>(data: &'a Items, boards: &[String]) -> HashMap<String, Vec<&'a StorageItem>> {
+    let mut grouped: HashMap<String, Vec<&StorageItem>> = HashMap::new();
+    for item in data.values() {
+        for b in boards {
+            if item.boards().iter().any(|ib| board::board_eq(ib, b)) {
+                grouped.entry(b.clone()).or_default().push(item);
+            }
+        }
     }
+    grouped
+}
 
-    if check {
-        let ids: Vec<u64> = input.iter().filter_map(|s| s.parse().ok()).collect();
-        return taskbook.check_tasks(&ids);
+fn group_by_date(data: &Items) -> HashMap<String, Vec<&StorageItem>> {
+    let mut grouped: HashMap<String, Vec<&StorageItem>> = HashMap::new();
+    for item in data.values() {
+        grouped
+            .entry(item.date().to_string())
+            .or_default()
+            .push(item);
     }
-
-    if begin {
-        let ids: Vec<u64> = input.iter().filter_map(|s| s.parse().ok()).collect();
-        return taskbook.begin_tasks(&ids);
-    }
-
-    if star {
-        let ids: Vec<u64> = input.iter().filter_map(|s| s.parse().ok()).collect();
-        return taskbook.star_items(&ids);
-    }
-
-    if priority {
-        return taskbook.update_priority(&input);
-    }
-
-    if due {
-        return taskbook.update_due_date(&input);
-    }
-
-    if copy {
-        let ids: Vec<u64> = input.iter().filter_map(|s| s.parse().ok()).collect();
-        return taskbook.copy_to_clipboard(&ids);
-    }
-
-    if timeline {
-        taskbook.display_by_date()?;
-        return taskbook.display_stats();
-    }
-
-    if find {
-        return taskbook.find_items(&input);
-    }
-
-    if list {
-        taskbook.list_by_attributes(&input)?;
-        return taskbook.display_stats();
-    }
-
-    if edit {
-        return taskbook.edit_description(&input);
-    }
-
-    if r#move {
-        return taskbook.move_boards(&input);
-    }
-
-    if clear {
-        return taskbook.clear();
-    }
-
-    if tag {
-        return taskbook.update_tags(&input);
-    }
-
-    // Default: display board view and stats
-    taskbook.display_by_board()?;
-    taskbook.display_stats()
+    grouped
 }
 
 /// Migrate local data to the remote server.
-pub fn migrate(taskbook_dir: Option<PathBuf>) -> Result<()> {
+fn migrate(taskbook_dir: Option<PathBuf>) -> Result<()> {
     let creds = Credentials::load()?.ok_or_else(|| {
         TaskbookError::Auth("not logged in — run `tb register` or `tb login` first".to_string())
     })?;

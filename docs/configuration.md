@@ -60,7 +60,7 @@ Whether to show completed tasks in the board view.
 }
 ```
 
-When `false`, completed tasks are hidden from the board view but still exist and can be seen with `tb --list done`.
+When `false`, completed tasks are hidden from the board view but still exist and can be seen with `tb list done`.
 
 ### displayProgressOverview
 

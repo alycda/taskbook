@@ -115,21 +115,21 @@ pub fn render_help_popup(frame: &mut Frame, app: &App, scroll: u16) {
         ]),
         Line::from(vec![
             Span::styled("    e            ", key_style),
-            Span::styled("→ /edit @<id> <desc>", desc_style),
+            Span::styled("→ /edit <id> <desc>", desc_style),
         ]),
         Line::from(vec![
             Span::styled("    m            ", key_style),
-            Span::styled("→ /move @<id> @...", desc_style),
+            Span::styled("→ /move <id> @...", desc_style),
         ]),
         Line::from(vec![
             Span::styled("    p            ", key_style),
-            Span::styled("→ /priority @<id> ...", desc_style),
+            Span::styled("→ /priority <id> ...", desc_style),
         ]),
         Line::from(""),
         Line::from(Span::styled("  Slash Commands", section_style)),
         Line::from(vec![
             Span::styled("    /task        ", cmd_style),
-            Span::styled("@board +tag Description p:2", desc_style),
+            Span::styled("@board +tag Description p:1-3", desc_style),
         ]),
         Line::from(vec![
             Span::styled("                 ", cmd_style),
@@ -141,11 +141,15 @@ pub fn render_help_popup(frame: &mut Frame, app: &App, scroll: u16) {
         ]),
         Line::from(vec![
             Span::styled("    /edit        ", cmd_style),
-            Span::styled("@<id> New description", desc_style),
+            Span::styled("<id> New description", desc_style),
         ]),
         Line::from(vec![
             Span::styled("    /move        ", cmd_style),
-            Span::styled("@<id> @board", desc_style),
+            Span::styled("<id> @board", desc_style),
+        ]),
+        Line::from(vec![
+            Span::styled("    /priority    ", cmd_style),
+            Span::styled("<id> <1-3>  (1 = high, 3 = normal)", desc_style),
         ]),
         Line::from(vec![
             Span::styled("    /delete      ", cmd_style),
@@ -156,8 +160,12 @@ pub fn render_help_popup(frame: &mut Frame, app: &App, scroll: u16) {
             Span::styled("<term>", desc_style),
         ]),
         Line::from(vec![
+            Span::styled("    /show        ", cmd_style),
+            Span::styled("<id> [id...]  only these items (Esc clears)", desc_style),
+        ]),
+        Line::from(vec![
             Span::styled("    /tag         ", cmd_style),
-            Span::styled("@<id> +add -remove", desc_style),
+            Span::styled("<id> +add -remove", desc_style),
         ]),
         Line::from(vec![
             Span::styled("    /clear       ", cmd_style),
