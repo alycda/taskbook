@@ -1395,6 +1395,7 @@ impl Taskbook {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::storage::test_support::{permuted_ids, write_tasks};
     use crate::storage::LocalStorage;
     use std::fs;
 
@@ -1403,16 +1404,15 @@ mod tests {
     fn taskbook_with_tasks(customize: impl Fn(&mut Task)) -> (Taskbook, std::path::PathBuf) {
         let dir = std::env::temp_dir().join(format!("tb-taskbook-test-{}", uuid::Uuid::new_v4()));
         let storage = LocalStorage::new(&dir).unwrap();
-        let entries: Vec<String> = (0..20u64)
-            .map(|i| (i * 7) % 20 + 1)
+        let tasks: Vec<Task> = permuted_ids()
+            .into_iter()
             .map(|id| {
                 let mut task = Task::new(id, format!("task {id}"), vec!["My Board".into()], 1);
                 customize(&mut task);
-                format!("\"{id}\": {}", serde_json::to_string(&task).unwrap())
+                task
             })
             .collect();
-        let file = dir.join("storage").join("storage.json");
-        fs::write(file, format!("{{{}}}", entries.join(","))).unwrap();
+        write_tasks(&dir.join("storage").join("storage.json"), &tasks);
         (Taskbook::with_storage(Box::new(storage)), dir)
     }
 

@@ -132,25 +132,18 @@ impl StorageBackend for LocalStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::storage::test_support::{permuted_ids, write_tasks};
     use taskbook_common::Task;
-
-    /// IDs 1..=20 in a fixed non-sorted order (7 is coprime to 20).
-    fn permuted_ids() -> Vec<u64> {
-        (0..20).map(|i| (i * 7) % 20 + 1).collect()
-    }
 
     /// Writes a storage.json whose keys appear in the given order.
     fn storage_with_keys(ids: &[u64]) -> LocalStorage {
         let dir = std::env::temp_dir().join(format!("tb-local-test-{}", Uuid::new_v4()));
         let storage = LocalStorage::new(&dir).unwrap();
-        let entries: Vec<String> = ids
+        let tasks: Vec<Task> = ids
             .iter()
-            .map(|&id| {
-                let task = Task::new(id, format!("task {id}"), vec!["My Board".into()], 1);
-                format!("\"{id}\": {}", serde_json::to_string(&task).unwrap())
-            })
+            .map(|&id| Task::new(id, format!("task {id}"), vec!["My Board".into()], 1))
             .collect();
-        fs::write(&storage.storage_file, format!("{{{}}}", entries.join(","))).unwrap();
+        write_tasks(&storage.storage_file, &tasks);
         storage
     }
 
