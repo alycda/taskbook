@@ -128,7 +128,7 @@ impl Serialize for SortedItems<'_> {
 /// Numeric keys first in numeric order, then any non-numeric keys lexically.
 /// Ties between distinct keys of equal value ("1", "01") break lexically, so
 /// the order never depends on HashMap iteration.
-fn compare_keys(a: &str, b: &str) -> Ordering {
+pub(crate) fn compare_keys(a: &str, b: &str) -> Ordering {
     match (a.parse::<u64>(), b.parse::<u64>()) {
         (Ok(x), Ok(y)) => x.cmp(&y).then_with(|| a.cmp(b)),
         (Ok(_), Err(_)) => Ordering::Less,

@@ -8,7 +8,7 @@ use crate::directory::resolve_taskbook_directory;
 use crate::editor;
 use crate::error::{Result, TaskbookError};
 use crate::render::{Render, Stats};
-use crate::storage::{LocalStorage, RemoteStorage, StorageBackend};
+use crate::storage::{compare_keys, LocalStorage, RemoteStorage, StorageBackend};
 use taskbook_common::board::{self, DEFAULT_BOARD};
 use taskbook_common::due;
 use taskbook_common::{Note, StorageItem, Task};
@@ -288,6 +288,14 @@ impl Taskbook {
         }
     }
 
+    /// Items in ascending ID order, the order the storage file is written in,
+    /// so listings don't follow HashMap iteration order.
+    fn items_in_id_order(data: &HashMap<String, StorageItem>) -> Vec<&StorageItem> {
+        let mut entries: Vec<_> = data.iter().collect();
+        entries.sort_by(|(a, _), (b, _)| compare_keys(a, b));
+        entries.into_iter().map(|(_, item)| item).collect()
+    }
+
     fn group_by_board<'a>(
         &self,
         data: &'a HashMap<String, StorageItem>,
@@ -295,7 +303,7 @@ impl Taskbook {
     ) -> HashMap<String, Vec<&'a StorageItem>> {
         let mut grouped: HashMap<String, Vec<&StorageItem>> = HashMap::new();
 
-        for item in data.values() {
+        for item in Self::items_in_id_order(data) {
             for board in boards {
                 if item.boards().iter().any(|b| board::board_eq(b, board)) {
                     grouped.entry(board.clone()).or_default().push(item);
@@ -312,7 +320,7 @@ impl Taskbook {
     ) -> HashMap<String, Vec<&'a StorageItem>> {
         let mut grouped: HashMap<String, Vec<&StorageItem>> = HashMap::new();
 
-        for item in data.values() {
+        for item in Self::items_in_id_order(data) {
             let date = item.date().to_string();
             grouped.entry(date).or_default().push(item);
         }
