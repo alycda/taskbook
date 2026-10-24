@@ -306,6 +306,7 @@ fn list_items(taskbook: &Taskbook, args: &Value) -> Result<Value, String> {
         }
         true
     });
+    items.sort_by_key(|item| item.id());
 
     Ok(Value::Array(
         items.iter().map(|item| item_to_json(item)).collect(),
