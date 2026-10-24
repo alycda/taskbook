@@ -246,6 +246,33 @@ mod tests {
     }
 
     #[test]
+    fn list_items_returns_items_in_id_order() {
+        let tb = test_taskbook();
+        for n in 1..=20 {
+            request(
+                &tb,
+                json!({"jsonrpc":"2.0","id":n,"method":"tools/call","params":{
+                    "name":"create_task","arguments":{"description":format!("task {n}")}
+                }}),
+            );
+        }
+
+        let resp = request(
+            &tb,
+            json!({"jsonrpc":"2.0","id":21,"method":"tools/call","params":{
+                "name":"list_items","arguments":{}
+            }}),
+        );
+        let ids: Vec<u64> = tool_payload(&resp)
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["id"].as_u64().unwrap())
+            .collect();
+        assert_eq!(ids, (1..=20).collect::<Vec<_>>());
+    }
+
+    #[test]
     fn set_task_state_and_filters() {
         let tb = test_taskbook();
         request(
