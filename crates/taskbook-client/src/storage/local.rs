@@ -131,3 +131,61 @@ impl StorageBackend for LocalStorage {
         self.write_json_file(&self.archive_file, data)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use taskbook_common::Task;
+
+    /// IDs 1..=20 in a fixed non-sorted order (7 is coprime to 20).
+    fn permuted_ids() -> Vec<u64> {
+        (0..20).map(|i| (i * 7) % 20 + 1).collect()
+    }
+
+    /// Writes a storage.json whose keys appear in the given order.
+    fn storage_with_keys(ids: &[u64]) -> LocalStorage {
+        let dir = std::env::temp_dir().join(format!("tb-local-test-{}", Uuid::new_v4()));
+        let storage = LocalStorage::new(&dir).unwrap();
+        let entries: Vec<String> = ids
+            .iter()
+            .map(|&id| {
+                let task = Task::new(id, format!("task {id}"), vec!["My Board".into()], 1);
+                format!("\"{id}\": {}", serde_json::to_string(&task).unwrap())
+            })
+            .collect();
+        fs::write(&storage.storage_file, format!("{{{}}}", entries.join(","))).unwrap();
+        storage
+    }
+
+    fn top_level_keys(json: &str) -> Vec<String> {
+        json.lines()
+            .filter(|line| line.starts_with("  \"") && line.ends_with('{'))
+            .map(|line| line.trim().split('"').nth(1).unwrap().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn writes_keys_in_numeric_order() {
+        let storage = storage_with_keys(&permuted_ids());
+
+        storage.set(&storage.get().unwrap()).unwrap();
+
+        let json = fs::read_to_string(&storage.storage_file).unwrap();
+        let expected: Vec<String> = (1..=20).map(|id: u64| id.to_string()).collect();
+        assert_eq!(top_level_keys(&json), expected);
+        fs::remove_dir_all(&storage.main_app_dir).unwrap();
+    }
+
+    #[test]
+    fn same_data_writes_identical_bytes() {
+        let storage = storage_with_keys(&permuted_ids());
+
+        storage.set(&storage.get().unwrap()).unwrap();
+        let first = fs::read(&storage.storage_file).unwrap();
+        storage.set(&storage.get().unwrap()).unwrap();
+        let second = fs::read(&storage.storage_file).unwrap();
+
+        assert_eq!(first, second);
+        fs::remove_dir_all(&storage.main_app_dir).unwrap();
+    }
+}

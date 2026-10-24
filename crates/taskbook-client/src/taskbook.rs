@@ -1408,3 +1408,79 @@ impl Taskbook {
         self.save(&data)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::LocalStorage;
+    use std::fs;
+
+    /// Builds a Taskbook over a storage.json holding tasks 1..=20, written in
+    /// a fixed non-sorted key order. `customize` sets each task's fields.
+    fn taskbook_with_tasks(customize: impl Fn(&mut Task)) -> (Taskbook, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("tb-taskbook-test-{}", uuid::Uuid::new_v4()));
+        let storage = LocalStorage::new(&dir).unwrap();
+        let entries: Vec<String> = (0..20u64)
+            .map(|i| (i * 7) % 20 + 1)
+            .map(|id| {
+                let mut task = Task::new(id, format!("task {id}"), vec!["My Board".into()], 1);
+                customize(&mut task);
+                format!("\"{id}\": {}", serde_json::to_string(&task).unwrap())
+            })
+            .collect();
+        let file = dir.join("storage").join("storage.json");
+        fs::write(file, format!("{{{}}}", entries.join(","))).unwrap();
+        (Taskbook::with_storage(Box::new(storage)), dir)
+    }
+
+    fn ids(items: &[&StorageItem]) -> Vec<u64> {
+        items.iter().map(|item| item.id()).collect()
+    }
+
+    #[test]
+    fn group_by_board_lists_items_in_id_order() {
+        let (taskbook, dir) = taskbook_with_tasks(|task| {
+            task.boards = if task.id % 2 == 1 {
+                vec!["My Board".into(), "b".into()]
+            } else {
+                vec!["b".into()]
+            };
+        });
+        let data = taskbook.get_data().unwrap();
+        let boards = vec!["My Board".to_string(), "b".to_string()];
+
+        let grouped = taskbook.group_by_board(&data, &boards);
+
+        assert_eq!(ids(&grouped["b"]), (1..=20).collect::<Vec<_>>());
+        assert_eq!(
+            ids(&grouped["My Board"]),
+            (1..=20).step_by(2).collect::<Vec<_>>()
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn group_by_date_lists_items_in_id_order() {
+        let (taskbook, dir) = taskbook_with_tasks(|task| {
+            task.date = if task.id % 2 == 1 {
+                "Thu Oct 22 2026"
+            } else {
+                "Fri Oct 23 2026"
+            }
+            .into();
+        });
+        let data = taskbook.get_data().unwrap();
+
+        let grouped = taskbook.group_by_date(&data);
+
+        assert_eq!(
+            ids(&grouped["Thu Oct 22 2026"]),
+            (1..=20).step_by(2).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            ids(&grouped["Fri Oct 23 2026"]),
+            (2..=20).step_by(2).collect::<Vec<_>>()
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+}
