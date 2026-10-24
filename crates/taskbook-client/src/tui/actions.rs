@@ -234,7 +234,7 @@ fn execute_command(app: &mut App, cmd: ParsedCommand) -> Result<()> {
             // Open editor for the newly created note
             // Find the highest ID note (just created)
             if let Some(max_id) = app.items.values().map(|i| i.id()).max() {
-                if let Some(item) = app.items.get(&max_id.to_string()) {
+                if let Some(item) = app.items.get(&max_id) {
                     if !item.is_task() {
                         edit_note_external(app, max_id)?;
                     }
@@ -521,7 +521,7 @@ fn handle_shortcut_key(app: &mut App, key: KeyEvent) -> Result<()> {
 // Action implementations
 
 fn toggle_check(app: &mut App, id: u64) -> Result<()> {
-    if let Some(item) = app.items.get(&id.to_string()) {
+    if let Some(item) = app.items.get(&id) {
         if item.is_task() {
             app.taskbook.check_tasks_silent(&[id])?;
             app.refresh_items()?;
@@ -532,7 +532,7 @@ fn toggle_check(app: &mut App, id: u64) -> Result<()> {
 }
 
 fn toggle_begin(app: &mut App, id: u64) -> Result<()> {
-    if let Some(item) = app.items.get(&id.to_string()) {
+    if let Some(item) = app.items.get(&id) {
         if item.is_task() {
             app.taskbook.begin_tasks_silent(&[id])?;
             app.refresh_items()?;
@@ -669,7 +669,7 @@ fn rename_board(app: &mut App, old_name: &str, new_name: &str) -> Result<()> {
 }
 
 fn edit_note_external(app: &mut App, id: u64) -> Result<()> {
-    let item = app.items.get(&id.to_string());
+    let item = app.items.get(&id);
     let note = match item.and_then(|i| i.as_note()) {
         Some(n) => n,
         None => {

@@ -8,7 +8,7 @@ use crate::directory::resolve_taskbook_directory;
 use crate::editor;
 use crate::error::{Result, TaskbookError};
 use crate::render::{Render, Stats};
-use crate::storage::{LocalStorage, RemoteStorage, StorageBackend};
+use crate::storage::{Items, LocalStorage, RemoteStorage, StorageBackend};
 use taskbook_common::board::{self, DEFAULT_BOARD};
 use taskbook_common::due;
 use taskbook_common::{Note, StorageItem, Task};
@@ -52,29 +52,24 @@ impl Taskbook {
         }
     }
 
-    fn get_data(&self) -> Result<HashMap<String, StorageItem>> {
+    fn get_data(&self) -> Result<Items> {
         self.storage.get()
     }
 
-    fn get_archive(&self) -> Result<HashMap<String, StorageItem>> {
+    fn get_archive(&self) -> Result<Items> {
         self.storage.get_archive()
     }
 
-    fn save(&self, data: &HashMap<String, StorageItem>) -> Result<()> {
+    fn save(&self, data: &Items) -> Result<()> {
         self.storage.set(data)
     }
 
-    fn save_archive(&self, data: &HashMap<String, StorageItem>) -> Result<()> {
+    fn save_archive(&self, data: &Items) -> Result<()> {
         self.storage.set_archive(data)
     }
 
-    fn generate_id(&self, data: &HashMap<String, StorageItem>) -> u64 {
-        let max = data
-            .keys()
-            .filter_map(|k| k.parse::<u64>().ok())
-            .max()
-            .unwrap_or(0);
-        max + 1
+    fn generate_id(&self, data: &Items) -> u64 {
+        data.last_key_value().map_or(0, |(id, _)| *id) + 1
     }
 
     fn remove_duplicates(&self, ids: &[u64]) -> Vec<u64> {
@@ -82,8 +77,8 @@ impl Taskbook {
         ids.iter().filter(|id| seen.insert(**id)).copied().collect()
     }
 
-    fn get_ids(&self, data: &HashMap<String, StorageItem>) -> HashSet<u64> {
-        data.keys().filter_map(|k| k.parse::<u64>().ok()).collect()
+    fn get_ids(&self, data: &Items) -> HashSet<u64> {
+        data.keys().copied().collect()
     }
 
     /// Validate IDs without rendering errors (for TUI/silent methods)
@@ -125,14 +120,11 @@ impl Taskbook {
         Ok(unique_ids)
     }
 
-    fn get_boards(&self, data: &HashMap<String, StorageItem>) -> Vec<String> {
+    fn get_boards(&self, data: &Items) -> Vec<String> {
         let mut boards = vec![DEFAULT_BOARD.to_string()];
 
-        // Iterate items in ID order for deterministic board discovery
-        let mut items: Vec<_> = data.iter().collect();
-        items.sort_by_key(|(k, _)| k.parse::<u64>().unwrap_or(u64::MAX));
-
-        for (_, item) in &items {
+        // Items iterate in ID order, so board discovery is deterministic
+        for item in data.values() {
             for b in item.boards() {
                 if !boards.iter().any(|existing| board::board_eq(existing, b)) {
                     boards.push(b.clone());
@@ -174,7 +166,7 @@ impl Taskbook {
         })
     }
 
-    fn get_stats(&self, data: &HashMap<String, StorageItem>) -> Stats {
+    fn get_stats(&self, data: &Items) -> Stats {
         let mut complete = 0;
         let mut in_progress = 0;
         let mut pending = 0;
@@ -246,27 +238,27 @@ impl Taskbook {
         false
     }
 
-    fn filter_task(data: &mut HashMap<String, StorageItem>) {
+    fn filter_task(data: &mut Items) {
         data.retain(|_, item| item.is_task());
     }
 
-    fn filter_note(data: &mut HashMap<String, StorageItem>) {
+    fn filter_note(data: &mut Items) {
         data.retain(|_, item| !item.is_task());
     }
 
-    fn filter_starred(data: &mut HashMap<String, StorageItem>) {
+    fn filter_starred(data: &mut Items) {
         data.retain(|_, item| item.is_starred());
     }
 
-    fn filter_complete(data: &mut HashMap<String, StorageItem>) {
+    fn filter_complete(data: &mut Items) {
         data.retain(|_, item| item.as_task().map(|t| t.is_complete).unwrap_or(false));
     }
 
-    fn filter_in_progress(data: &mut HashMap<String, StorageItem>) {
+    fn filter_in_progress(data: &mut Items) {
         data.retain(|_, item| item.as_task().map(|t| t.in_progress).unwrap_or(false));
     }
 
-    fn filter_pending(data: &mut HashMap<String, StorageItem>) {
+    fn filter_pending(data: &mut Items) {
         data.retain(|_, item| {
             item.as_task()
                 .map(|t| !t.is_complete && !t.in_progress)
@@ -274,7 +266,7 @@ impl Taskbook {
         });
     }
 
-    fn filter_by_attributes(&self, attrs: &[String], data: &mut HashMap<String, StorageItem>) {
+    fn filter_by_attributes(&self, attrs: &[String], data: &mut Items) {
         for attr in attrs {
             match attr.as_str() {
                 "star" | "starred" => Self::filter_starred(data),
@@ -290,7 +282,7 @@ impl Taskbook {
 
     fn group_by_board<'a>(
         &self,
-        data: &'a HashMap<String, StorageItem>,
+        data: &'a Items,
         boards: &[String],
     ) -> HashMap<String, Vec<&'a StorageItem>> {
         let mut grouped: HashMap<String, Vec<&StorageItem>> = HashMap::new();
@@ -306,10 +298,7 @@ impl Taskbook {
         grouped
     }
 
-    fn group_by_date<'a>(
-        &self,
-        data: &'a HashMap<String, StorageItem>,
-    ) -> HashMap<String, Vec<&'a StorageItem>> {
+    fn group_by_date<'a>(&self, data: &'a Items) -> HashMap<String, Vec<&'a StorageItem>> {
         let mut grouped: HashMap<String, Vec<&StorageItem>> = HashMap::new();
 
         for item in data.values() {
@@ -330,7 +319,7 @@ impl Taskbook {
             StorageItem::Note(n) => n.id = archive_id,
         }
 
-        archive.insert(archive_id.to_string(), item);
+        archive.insert(archive_id, item);
         self.save_archive(&archive)
     }
 
@@ -344,19 +333,19 @@ impl Taskbook {
             StorageItem::Note(n) => n.id = restore_id,
         }
 
-        data.insert(restore_id.to_string(), item);
+        data.insert(restore_id, item);
         self.save(&data)
     }
 
     // Public API methods for TUI access
 
     /// Get all items without rendering (for TUI)
-    pub fn get_all_items(&self) -> Result<HashMap<String, StorageItem>> {
+    pub fn get_all_items(&self) -> Result<Items> {
         self.get_data()
     }
 
     /// Get all archived items without rendering (for TUI)
-    pub fn get_all_archive_items(&self) -> Result<HashMap<String, StorageItem>> {
+    pub fn get_all_archive_items(&self) -> Result<Items> {
         self.get_archive()
     }
 
@@ -396,7 +385,7 @@ impl Taskbook {
         let id = self.generate_id(&data);
         let task =
             Task::new_with_tags(id, description, boards, priority, tags).with_due_date(due_date);
-        data.insert(id.to_string(), StorageItem::Task(task));
+        data.insert(id, StorageItem::Task(task));
         self.save(&data)?;
         Ok(id)
     }
@@ -421,7 +410,7 @@ impl Taskbook {
         let mut data = self.get_data()?;
         let id = self.generate_id(&data);
         let note = Note::new_with_tags(id, description, boards, tags);
-        data.insert(id.to_string(), StorageItem::Note(note));
+        data.insert(id, StorageItem::Note(note));
         self.save(&data)?;
         Ok(id)
     }
@@ -441,7 +430,7 @@ impl Taskbook {
         let mut data = self.get_data()?;
         let id = self.generate_id(&data);
         let note = Note::new_with_body(id, title, body, boards);
-        data.insert(id.to_string(), StorageItem::Note(note));
+        data.insert(id, StorageItem::Note(note));
         self.save(&data)?;
         Ok(id)
     }
@@ -452,7 +441,7 @@ impl Taskbook {
         let existing_ids = self.get_ids(&data);
         self.validate_ids_silent(&[id], &existing_ids)?;
 
-        if let Some(item) = data.get_mut(&id.to_string()) {
+        if let Some(item) = data.get_mut(&id) {
             if !item.set_note_body(body) {
                 return Err(TaskbookError::General("Item is not a note".to_string()));
             }
@@ -468,7 +457,7 @@ impl Taskbook {
         let validated_ids = self.validate_ids_silent(ids, &existing_ids)?;
 
         for id in validated_ids {
-            if let Some(item) = data.get_mut(&id.to_string()) {
+            if let Some(item) = data.get_mut(&id) {
                 if let Some(task) = item.as_task_mut() {
                     task.in_progress = false;
                     task.is_complete = !task.is_complete;
@@ -486,7 +475,7 @@ impl Taskbook {
         let validated_ids = self.validate_ids_silent(ids, &existing_ids)?;
 
         for id in validated_ids {
-            if let Some(item) = data.get_mut(&id.to_string()) {
+            if let Some(item) = data.get_mut(&id) {
                 if let Some(task) = item.as_task_mut() {
                     task.is_complete = false;
                     task.in_progress = !task.in_progress;
@@ -504,7 +493,7 @@ impl Taskbook {
         let validated_ids = self.validate_ids_silent(ids, &existing_ids)?;
 
         for id in validated_ids {
-            if let Some(item) = data.get_mut(&id.to_string()) {
+            if let Some(item) = data.get_mut(&id) {
                 let new_starred = !item.is_starred();
                 item.set_starred(new_starred);
             }
@@ -520,7 +509,7 @@ impl Taskbook {
         let validated_ids = self.validate_ids_silent(ids, &existing_ids)?;
 
         for id in validated_ids {
-            if let Some(item) = data.remove(&id.to_string()) {
+            if let Some(item) = data.remove(&id) {
                 self.save_item_to_archive(item)?;
             }
         }
@@ -535,7 +524,7 @@ impl Taskbook {
         let validated_ids = self.validate_ids_silent(ids, &archive_ids)?;
 
         for id in validated_ids {
-            if let Some(item) = archive.remove(&id.to_string()) {
+            if let Some(item) = archive.remove(&id) {
                 self.save_item_to_storage(item)?;
             }
         }
@@ -549,7 +538,7 @@ impl Taskbook {
         let existing_ids = self.get_ids(&data);
         self.validate_ids_silent(&[id], &existing_ids)?;
 
-        if let Some(item) = data.get_mut(&id.to_string()) {
+        if let Some(item) = data.get_mut(&id) {
             item.set_description(new_desc.to_string());
         }
 
@@ -566,7 +555,7 @@ impl Taskbook {
             .into_iter()
             .map(|b| board::normalize_board_name(&b))
             .collect();
-        if let Some(item) = data.get_mut(&id.to_string()) {
+        if let Some(item) = data.get_mut(&id) {
             item.set_boards(normalized);
         }
 
@@ -579,7 +568,7 @@ impl Taskbook {
         let existing_ids = self.get_ids(&data);
         self.validate_ids_silent(&[id], &existing_ids)?;
 
-        if let Some(item) = data.get_mut(&id.to_string()) {
+        if let Some(item) = data.get_mut(&id) {
             if let Some(task) = item.as_task_mut() {
                 task.priority = priority;
             }
@@ -593,12 +582,10 @@ impl Taskbook {
         let data = self.get_data()?;
         let mut ids_to_delete: Vec<u64> = Vec::new();
 
-        for (id, item) in &data {
+        for (&id, item) in &data {
             if let Some(task) = item.as_task() {
                 if task.is_complete {
-                    if let Ok(id) = id.parse::<u64>() {
-                        ids_to_delete.push(id);
-                    }
+                    ids_to_delete.push(id);
                 }
             }
         }
@@ -610,7 +597,7 @@ impl Taskbook {
         let count = ids_to_delete.len();
         let mut data = self.get_data()?;
         for id in &ids_to_delete {
-            if let Some(item) = data.remove(&id.to_string()) {
+            if let Some(item) = data.remove(id) {
                 self.save_item_to_archive(item)?;
             }
         }
@@ -626,7 +613,7 @@ impl Taskbook {
 
         let descriptions: Vec<String> = validated_ids
             .iter()
-            .filter_map(|id| data.get(&id.to_string()))
+            .filter_map(|id| data.get(id))
             .map(|item| item.description().to_string())
             .collect();
 
@@ -692,7 +679,7 @@ impl Taskbook {
 
         let note = Note::new_with_tags(id, description, boards, tags);
         let mut data = self.get_data()?;
-        data.insert(id.to_string(), StorageItem::Note(note));
+        data.insert(id, StorageItem::Note(note));
         self.save(&data)?;
         self.render.success_create(id, false);
         Ok(())
@@ -712,7 +699,7 @@ impl Taskbook {
                     note_content.body,
                     vec![DEFAULT_BOARD.to_string()],
                 );
-                data.insert(id.to_string(), StorageItem::Note(note));
+                data.insert(id, StorageItem::Note(note));
                 self.save(&data)?;
                 self.render.success_create(id, false);
                 Ok(())
@@ -749,9 +736,7 @@ impl Taskbook {
         let id = validated_ids[0];
 
         // Get the current note
-        let item = data
-            .get(&id.to_string())
-            .ok_or(TaskbookError::InvalidId(id))?;
+        let item = data.get(&id).ok_or(TaskbookError::InvalidId(id))?;
 
         let note = item
             .as_note()
@@ -763,7 +748,7 @@ impl Taskbook {
         match content {
             Some(note_content) => {
                 let mut data = self.get_data()?;
-                if let Some(item) = data.get_mut(&id.to_string()) {
+                if let Some(item) = data.get_mut(&id) {
                     item.set_description(note_content.title);
                     item.set_note_body(note_content.body);
                 }
@@ -796,7 +781,7 @@ impl Taskbook {
         let task =
             Task::new_with_tags(id, description, boards, priority, tags).with_due_date(due_date);
         let mut data = self.get_data()?;
-        data.insert(id.to_string(), StorageItem::Task(task));
+        data.insert(id, StorageItem::Task(task));
         self.save(&data)?;
         self.render.success_create(id, true);
         Ok(())
@@ -809,7 +794,7 @@ impl Taskbook {
 
         let mut descriptions = Vec::new();
         for id in &validated_ids {
-            if let Some(item) = data.get(&id.to_string()) {
+            if let Some(item) = data.get(id) {
                 descriptions.push(item.description().to_string());
             }
         }
@@ -837,7 +822,7 @@ impl Taskbook {
         let mut unchecked = Vec::new();
 
         for id in &validated_ids {
-            if let Some(item) = data.get_mut(&id.to_string()) {
+            if let Some(item) = data.get_mut(id) {
                 if let Some(task) = item.as_task_mut() {
                     task.in_progress = false;
                     task.is_complete = !task.is_complete;
@@ -865,7 +850,7 @@ impl Taskbook {
         let mut paused = Vec::new();
 
         for id in &validated_ids {
-            if let Some(item) = data.get_mut(&id.to_string()) {
+            if let Some(item) = data.get_mut(id) {
                 if let Some(task) = item.as_task_mut() {
                     task.is_complete = false;
                     task.in_progress = !task.in_progress;
@@ -890,7 +875,7 @@ impl Taskbook {
         let validated_ids = self.validate_ids(ids, &existing_ids)?;
 
         for id in &validated_ids {
-            if let Some(item) = data.remove(&id.to_string()) {
+            if let Some(item) = data.remove(id) {
                 self.save_item_to_archive(item)?;
             }
         }
@@ -963,7 +948,7 @@ impl Taskbook {
             return Err(TaskbookError::InvalidId(0));
         }
 
-        if let Some(item) = data.get_mut(&id.to_string()) {
+        if let Some(item) = data.get_mut(&id) {
             item.set_description(new_desc);
         }
 
@@ -974,11 +959,11 @@ impl Taskbook {
 
     pub fn find_items(&self, terms: &[String]) -> Result<()> {
         let data = self.get_data()?;
-        let mut result: HashMap<String, StorageItem> = HashMap::new();
+        let mut result = Items::new();
 
         for (id, item) in &data {
             if Self::item_matches_terms(item, terms) {
-                result.insert(id.clone(), item.clone());
+                result.insert(*id, item.clone());
             }
         }
 
@@ -1076,7 +1061,7 @@ impl Taskbook {
             return Err(TaskbookError::InvalidId(0));
         }
 
-        if let Some(item) = data.get_mut(&id.to_string()) {
+        if let Some(item) = data.get_mut(&id) {
             item.set_boards(boards.clone());
         }
 
@@ -1092,7 +1077,7 @@ impl Taskbook {
         let validated_ids = self.validate_ids(ids, &archive_ids)?;
 
         for id in &validated_ids {
-            if let Some(item) = archive.remove(&id.to_string()) {
+            if let Some(item) = archive.remove(id) {
                 self.save_item_to_storage(item)?;
             }
         }
@@ -1111,7 +1096,7 @@ impl Taskbook {
         let mut unstarred = Vec::new();
 
         for id in &validated_ids {
-            if let Some(item) = data.get_mut(&id.to_string()) {
+            if let Some(item) = data.get_mut(id) {
                 let new_starred = !item.is_starred();
                 item.set_starred(new_starred);
                 if new_starred {
@@ -1163,7 +1148,7 @@ impl Taskbook {
         let validated_ids = self.validate_ids(&[id], &existing_ids)?;
         let id = validated_ids[0];
 
-        if let Some(item) = data.get_mut(&id.to_string()) {
+        if let Some(item) = data.get_mut(&id) {
             if let Some(task) = item.as_task_mut() {
                 task.priority = level;
             }
@@ -1222,7 +1207,7 @@ impl Taskbook {
         let existing_ids = self.get_ids(&data);
         self.validate_ids_silent(&[id], &existing_ids)?;
 
-        if let Some(item) = data.get_mut(&id.to_string()) {
+        if let Some(item) = data.get_mut(&id) {
             let task = item
                 .as_task_mut()
                 .ok_or_else(|| TaskbookError::General(format!("item {id} is not a task")))?;
@@ -1256,7 +1241,7 @@ impl Taskbook {
         let existing_ids = self.get_ids(&data);
         self.validate_ids_silent(&[id], &existing_ids)?;
 
-        if let Some(item) = data.get_mut(&id.to_string()) {
+        if let Some(item) = data.get_mut(&id) {
             item.set_starred(starred);
         }
 
@@ -1269,7 +1254,7 @@ impl Taskbook {
         let existing_ids = self.get_ids(&data);
         self.validate_ids_silent(&[id], &existing_ids)?;
 
-        if let Some(item) = data.get_mut(&id.to_string()) {
+        if let Some(item) = data.get_mut(&id) {
             let task = item
                 .as_task_mut()
                 .ok_or_else(|| TaskbookError::General(format!("item {id} is not a task")))?;
@@ -1283,12 +1268,10 @@ impl Taskbook {
         let data = self.get_data()?;
         let mut ids_to_delete: Vec<u64> = Vec::new();
 
-        for (id, item) in &data {
+        for (&id, item) in &data {
             if let Some(task) = item.as_task() {
                 if task.is_complete {
-                    if let Ok(id) = id.parse::<u64>() {
-                        ids_to_delete.push(id);
-                    }
+                    ids_to_delete.push(id);
                 }
             }
         }
@@ -1300,7 +1283,7 @@ impl Taskbook {
         // Delete items without the success message (we'll use success_clear instead)
         let mut data = self.get_data()?;
         for id in &ids_to_delete {
-            if let Some(item) = data.remove(&id.to_string()) {
+            if let Some(item) = data.remove(id) {
                 self.save_item_to_archive(item)?;
             }
         }
@@ -1359,7 +1342,7 @@ impl Taskbook {
             return Err(TaskbookError::General("No tags provided".to_string()));
         }
 
-        if let Some(item) = data.get_mut(&id.to_string()) {
+        if let Some(item) = data.get_mut(&id) {
             let mut current_tags: Vec<String> = item.tags().to_vec();
 
             // Remove tags
@@ -1391,7 +1374,7 @@ impl Taskbook {
         let existing_ids = self.get_ids(&data);
         self.validate_ids_silent(&[id], &existing_ids)?;
 
-        if let Some(item) = data.get_mut(&id.to_string()) {
+        if let Some(item) = data.get_mut(&id) {
             let mut current_tags: Vec<String> = item.tags().to_vec();
 
             current_tags.retain(|t| !remove_tags.iter().any(|r| t.eq_ignore_ascii_case(r)));

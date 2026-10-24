@@ -425,7 +425,7 @@ fn edit_item(taskbook: &Taskbook, args: &Value) -> Result<Value, String> {
             .collect();
         let data = taskbook.get_all_items().map_err(|e| e.to_string())?;
         let current: Vec<String> = data
-            .get(&id.to_string())
+            .get(&id)
             .map(|item| item.tags().to_vec())
             .unwrap_or_default();
         taskbook

@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -7,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::config::{Config, SortMethod};
 use crate::error::Result;
 use crate::render::Stats;
+use crate::storage::Items;
 use crate::taskbook::Taskbook;
 use taskbook_common::board;
 use taskbook_common::StorageItem;
@@ -60,7 +60,7 @@ pub struct App {
     /// List of boards for navigation
     pub boards: Vec<String>,
     /// Cached items grouped by board/date
-    pub items: HashMap<String, StorageItem>,
+    pub items: Items,
     /// Active popup/dialog state (Help only)
     pub popup: Option<PopupState>,
     /// Command line state
@@ -191,7 +191,7 @@ impl App {
             view: initial_view,
             selected_index: 0,
             boards: Vec::new(),
-            items: HashMap::new(),
+            items: Items::new(),
             popup: None,
             command_line: CommandLineState::default(),
             status_message: None,
@@ -443,8 +443,7 @@ impl App {
 
     /// Get the currently selected item
     pub fn selected_item(&self) -> Option<&StorageItem> {
-        self.selected_id()
-            .and_then(|id| self.items.get(&id.to_string()))
+        self.selected_id().and_then(|id| self.items.get(&id))
     }
 
     /// Move selection up

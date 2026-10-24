@@ -1,14 +1,11 @@
-use std::collections::HashMap;
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 
 use fs2::FileExt;
 use uuid::Uuid;
 
+use super::{Items, StorageBackend};
 use crate::error::Result;
-use taskbook_common::StorageItem;
-
-use super::StorageBackend;
 
 /// Local file-based storage with atomic writes and file locking
 pub struct LocalStorage {
@@ -92,16 +89,16 @@ impl LocalStorage {
         Ok(lock_file)
     }
 
-    fn read_json_file(&self, path: &Path) -> Result<HashMap<String, StorageItem>> {
+    fn read_json_file(&self, path: &Path) -> Result<Items> {
         if !path.exists() {
-            return Ok(HashMap::new());
+            return Ok(Items::new());
         }
         let content = fs::read_to_string(path)?;
-        let data: HashMap<String, StorageItem> = serde_json::from_str(&content)?;
+        let data: Items = serde_json::from_str(&content)?;
         Ok(data)
     }
 
-    fn write_json_file(&self, path: &Path, data: &HashMap<String, StorageItem>) -> Result<()> {
+    fn write_json_file(&self, path: &Path, data: &Items) -> Result<()> {
         let json = serde_json::to_string_pretty(data)?;
         let temp_file = self.get_temp_file(path);
         fs::write(&temp_file, json)?;
@@ -111,22 +108,22 @@ impl LocalStorage {
 }
 
 impl StorageBackend for LocalStorage {
-    fn get(&self) -> Result<HashMap<String, StorageItem>> {
+    fn get(&self) -> Result<Items> {
         let _lock = self.lock_file(&self.storage_file)?;
         self.read_json_file(&self.storage_file)
     }
 
-    fn get_archive(&self) -> Result<HashMap<String, StorageItem>> {
+    fn get_archive(&self) -> Result<Items> {
         let _lock = self.lock_file(&self.archive_file)?;
         self.read_json_file(&self.archive_file)
     }
 
-    fn set(&self, data: &HashMap<String, StorageItem>) -> Result<()> {
+    fn set(&self, data: &Items) -> Result<()> {
         let _lock = self.lock_file(&self.storage_file)?;
         self.write_json_file(&self.storage_file, data)
     }
 
-    fn set_archive(&self, data: &HashMap<String, StorageItem>) -> Result<()> {
+    fn set_archive(&self, data: &Items) -> Result<()> {
         let _lock = self.lock_file(&self.archive_file)?;
         self.write_json_file(&self.archive_file, data)
     }

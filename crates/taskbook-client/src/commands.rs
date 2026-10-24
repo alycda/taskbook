@@ -153,11 +153,11 @@ pub fn migrate(taskbook_dir: Option<PathBuf>) -> Result<()> {
     let client = ApiClient::new(&config.sync.server_url, Some(&creds.token));
 
     let mut encrypted_items = std::collections::HashMap::new();
-    for (key, item) in &items {
+    for (id, item) in &items {
         let encrypted = encrypt_item(&encryption_key, item)
             .map_err(|e| TaskbookError::General(format!("encryption failed: {e}")))?;
         encrypted_items.insert(
-            key.clone(),
+            id.to_string(),
             EncryptedItemData {
                 data: engine.encode(&encrypted.data),
                 nonce: engine.encode(&encrypted.nonce),
@@ -167,11 +167,11 @@ pub fn migrate(taskbook_dir: Option<PathBuf>) -> Result<()> {
     client.put_items(&encrypted_items)?;
 
     let mut encrypted_archive = std::collections::HashMap::new();
-    for (key, item) in &archive {
+    for (id, item) in &archive {
         let encrypted = encrypt_item(&encryption_key, item)
             .map_err(|e| TaskbookError::General(format!("encryption failed: {e}")))?;
         encrypted_archive.insert(
-            key.clone(),
+            id.to_string(),
             EncryptedItemData {
                 data: engine.encode(&encrypted.data),
                 nonce: engine.encode(&encrypted.nonce),

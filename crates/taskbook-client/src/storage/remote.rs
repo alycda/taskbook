@@ -1,13 +1,11 @@
 use std::collections::HashMap;
 
-use base64::Engine;
-use taskbook_common::encryption::{decrypt_item, encrypt_item, EncryptedItem};
-use taskbook_common::StorageItem;
-
-use super::StorageBackend;
+use super::{Items, StorageBackend};
 use crate::api_client::{ApiClient, EncryptedItemData};
 use crate::credentials::Credentials;
 use crate::error::{Result, TaskbookError};
+use base64::Engine;
+use taskbook_common::encryption::{decrypt_item, encrypt_item, EncryptedItem};
 
 /// Remote storage backend that communicates with a taskbook server.
 /// All data is encrypted client-side before being sent to the server.
@@ -31,14 +29,14 @@ impl RemoteStorage {
         })
     }
 
-    fn decrypt_items(
-        &self,
-        encrypted: &HashMap<String, EncryptedItemData>,
-    ) -> Result<HashMap<String, StorageItem>> {
+    fn decrypt_items(&self, encrypted: &HashMap<String, EncryptedItemData>) -> Result<Items> {
         let engine = base64::engine::general_purpose::STANDARD;
-        let mut result = HashMap::new();
+        let mut result = Items::new();
 
         for (key, item_data) in encrypted {
+            let id = key
+                .parse::<u64>()
+                .map_err(|_| TaskbookError::General(format!("invalid item key: {key}")))?;
             let data = engine
                 .decode(&item_data.data)
                 .map_err(|e| TaskbookError::General(format!("invalid base64 data: {e}")))?;
@@ -50,25 +48,22 @@ impl RemoteStorage {
             let item = decrypt_item(&self.encryption_key, &encrypted_item)
                 .map_err(|e| TaskbookError::General(format!("decryption failed: {e}")))?;
 
-            result.insert(key.clone(), item);
+            result.insert(id, item);
         }
 
         Ok(result)
     }
 
-    fn encrypt_items(
-        &self,
-        items: &HashMap<String, StorageItem>,
-    ) -> Result<HashMap<String, EncryptedItemData>> {
+    fn encrypt_items(&self, items: &Items) -> Result<HashMap<String, EncryptedItemData>> {
         let engine = base64::engine::general_purpose::STANDARD;
         let mut result = HashMap::new();
 
-        for (key, item) in items {
+        for (id, item) in items {
             let encrypted = encrypt_item(&self.encryption_key, item)
                 .map_err(|e| TaskbookError::General(format!("encryption failed: {e}")))?;
 
             result.insert(
-                key.clone(),
+                id.to_string(),
                 EncryptedItemData {
                     data: engine.encode(&encrypted.data),
                     nonce: engine.encode(&encrypted.nonce),
@@ -81,22 +76,22 @@ impl RemoteStorage {
 }
 
 impl StorageBackend for RemoteStorage {
-    fn get(&self) -> Result<HashMap<String, StorageItem>> {
+    fn get(&self) -> Result<Items> {
         let encrypted = self.client.get_items()?;
         self.decrypt_items(&encrypted)
     }
 
-    fn get_archive(&self) -> Result<HashMap<String, StorageItem>> {
+    fn get_archive(&self) -> Result<Items> {
         let encrypted = self.client.get_archive()?;
         self.decrypt_items(&encrypted)
     }
 
-    fn set(&self, data: &HashMap<String, StorageItem>) -> Result<()> {
+    fn set(&self, data: &Items) -> Result<()> {
         let encrypted = self.encrypt_items(data)?;
         self.client.put_items(&encrypted)
     }
 
-    fn set_archive(&self, data: &HashMap<String, StorageItem>) -> Result<()> {
+    fn set_archive(&self, data: &Items) -> Result<()> {
         let encrypted = self.encrypt_items(data)?;
         self.client.put_archive(&encrypted)
     }
