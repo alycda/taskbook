@@ -34,9 +34,12 @@ impl RemoteStorage {
         let mut result = Items::new();
 
         for (key, item_data) in encrypted {
+            // Only canonical keys: "01" or "+1" would parse to an existing ID.
             let id = key
                 .parse::<u64>()
-                .map_err(|_| TaskbookError::General(format!("invalid item key: {key}")))?;
+                .ok()
+                .filter(|id| id.to_string() == *key)
+                .ok_or_else(|| TaskbookError::General(format!("invalid item key: {key}")))?;
             let data = engine
                 .decode(&item_data.data)
                 .map_err(|e| TaskbookError::General(format!("invalid base64 data: {e}")))?;
@@ -94,5 +97,54 @@ impl StorageBackend for RemoteStorage {
     fn set_archive(&self, data: &Items) -> Result<()> {
         let encrypted = self.encrypt_items(data)?;
         self.client.put_archive(&encrypted)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use taskbook_common::{StorageItem, Task};
+
+    fn storage() -> RemoteStorage {
+        RemoteStorage {
+            client: ApiClient::new("http://localhost", None),
+            encryption_key: [7; 32],
+        }
+    }
+
+    fn encrypted(storage: &RemoteStorage, keys: &[&str]) -> HashMap<String, EncryptedItemData> {
+        let mut items = Items::new();
+        for (n, _) in keys.iter().enumerate() {
+            let id = n as u64 + 1;
+            items.insert(
+                id,
+                StorageItem::Task(Task::new(id, format!("task {id}"), vec![], 1)),
+            );
+        }
+        let by_id = storage.encrypt_items(&items).unwrap();
+        keys.iter()
+            .enumerate()
+            .map(|(n, key)| (key.to_string(), by_id[&(n + 1).to_string()].clone()))
+            .collect()
+    }
+
+    #[test]
+    fn decrypts_canonical_keys() {
+        let storage = storage();
+        let items = storage
+            .decrypt_items(&encrypted(&storage, &["1", "2", "10"]))
+            .unwrap();
+        assert_eq!(items.keys().copied().collect::<Vec<_>>(), [1, 2, 10]);
+    }
+
+    #[test]
+    fn rejects_keys_that_alias_another_id() {
+        // "01" and "+1" parse to 1; accepting them would let one item
+        // silently replace another, and the next set() would drop it.
+        let storage = storage();
+        for alias in ["01", "+1"] {
+            let result = storage.decrypt_items(&encrypted(&storage, &["1", alias]));
+            assert!(result.is_err(), "key {alias:?} was accepted");
+        }
     }
 }
