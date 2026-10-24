@@ -1,7 +1,6 @@
 mod local;
 mod remote;
 
-pub(crate) use local::compare_keys;
 pub use local::LocalStorage;
 pub use remote::RemoteStorage;
 

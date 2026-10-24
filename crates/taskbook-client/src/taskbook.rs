@@ -8,7 +8,7 @@ use crate::directory::resolve_taskbook_directory;
 use crate::editor;
 use crate::error::{Result, TaskbookError};
 use crate::render::{Render, Stats};
-use crate::storage::{compare_keys, LocalStorage, RemoteStorage, StorageBackend};
+use crate::storage::{LocalStorage, RemoteStorage, StorageBackend};
 use taskbook_common::board::{self, DEFAULT_BOARD};
 use taskbook_common::due;
 use taskbook_common::{Note, StorageItem, Task};
@@ -288,12 +288,12 @@ impl Taskbook {
         }
     }
 
-    /// Items in ascending ID order, the order the storage file is written in,
-    /// so listings don't follow HashMap iteration order.
+    /// Items in ascending ID order, as the TUI and MCP list them, so listings
+    /// don't follow HashMap iteration order.
     fn items_in_id_order(data: &HashMap<String, StorageItem>) -> Vec<&StorageItem> {
-        let mut entries: Vec<_> = data.iter().collect();
-        entries.sort_by(|(a, _), (b, _)| compare_keys(a, b));
-        entries.into_iter().map(|(_, item)| item).collect()
+        let mut items: Vec<_> = data.values().collect();
+        items.sort_by_key(|item| item.id());
+        items
     }
 
     fn group_by_board<'a>(
