@@ -8,6 +8,7 @@ A Rust port of [taskbook](https://github.com/klaussinani/taskbook) - tasks, boar
 
 - Create and manage tasks and notes organized into boards
 - Priority levels and progress tracking
+- Tags (`+tag`) for filtering across boards (an addition over the original taskbook)
 - Timeline and archive views
 - Customizable themes (including Catppuccin)
 - **Optional server sync** with end-to-end encryption (AES-256-GCM)
@@ -80,6 +81,7 @@ tb                          # Display board view
 tb --task "Description"     # Create task
 tb --task @board "Desc"     # Create task in specific board
 tb --task "Desc" p:2        # Create with priority (1=normal, 2=medium, 3=high)
+tb --task Desc +tag         # Create with tags (separate arguments, not quoted)
 tb --note "Description"     # Create note
 tb --note                   # Create note in external editor
 tb --edit-note @<id>        # Edit note in external editor
@@ -87,8 +89,9 @@ tb --check <id> [id...]     # Toggle task complete
 tb --begin <id> [id...]     # Toggle task in-progress
 tb --star <id> [id...]      # Toggle starred
 tb --delete <id> [id...]    # Delete to archive
-tb --restore <id> [id...]   # Restore from archive
+tb --restore <id> [id...]   # Restore from archive (archive IDs; item gets a new ID)
 tb --edit @<id> "New desc"  # Edit description
+tb --tag @<id> +add -remove # Add/remove tags
 tb --move @<id> board       # Move to board
 tb --priority @<id> <1-3>   # Set priority
 tb --find <term>            # Search items

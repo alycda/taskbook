@@ -6,6 +6,28 @@
 tb [OPTIONS] [INPUT...]
 ```
 
+## Item IDs
+
+Each item has a numeric ID, shown next to it on the board. IDs are not
+stored in a counter: a new ID is always `highest existing ID + 1`, computed at
+the moment it is needed (the same rule as the original Node.js taskbook, so
+the storage format stays compatible). Consequences:
+
+- **Only the top ID is reused.** Deleting the highest-numbered item frees its
+  number for the next item you create. Deleting an item in the middle leaves
+  a gap that is never filled.
+- **The board and the archive count separately.** Deleting an item moves it
+  to the archive under a new *archive* ID (`highest archive ID + 1`).
+  `tb --archive` shows those archive IDs, and `--restore` takes them.
+- **Restoring assigns a new board ID.** A restored item gets
+  `highest board ID + 1`, not the ID it had before it was deleted.
+
+```bash
+tb --delete 3       # task 3 becomes, e.g., archive item 7
+tb --archive        # look up its archive ID
+tb --restore 7      # comes back with the next free board ID, not 3
+```
+
 ## Display Commands
 
 ### Board View (default)
@@ -59,11 +81,22 @@ tb --task "Fix critical bug" p:3        # High priority
 tb --task @work "Update docs" p:2       # Medium priority
 ```
 
+**Tags**: Add `+tag` words (see [Tags](#tags)):
+
+```bash
+tb --task "Fix login bug" +backend +urgent
+```
+
 **Combined example**:
 
 ```bash
-tb --task @work @urgent "Deploy hotfix" p:3
+tb --task @work @urgent "Deploy hotfix" p:3 +ops
 ```
+
+Board names, priority, tags and `due:` are recognized only when they are
+separate arguments. A quoted argument is kept as literal description text:
+`tb --task "Fix +urgent"` creates a task whose description is `Fix +urgent`
+and which has no tags.
 
 ### Create Note
 
@@ -134,10 +167,16 @@ tb --edit @<id> <new description>
 tb -e @<id> <new description>
 ```
 
-Edits an item's description. The ID must be prefixed with `@`.
+Replaces an item's description. The ID must be prefixed with `@`.
+
+`+tag` arguments are **added** to the item's existing tags rather than becoming
+part of the description; existing tags are never removed by `--edit` (use
+[`--tag`](#tag-item) for that). Quote the text to keep a `+word` literally.
 
 ```bash
 tb --edit @3 "Updated task description"
+tb --edit @3 Updated task description +review   # also adds tag "review"
+tb --edit @3 "Give this a +1"                   # literal "+1", no tag
 ```
 
 ### Edit Note in Editor
@@ -164,6 +203,21 @@ Sets task priority: 1 = normal, 2 = medium, 3 = high.
 ```bash
 tb --priority @5 3    # Set to high priority
 tb --priority @5 1    # Set to normal priority
+```
+
+### Tag Item
+
+```bash
+tb --tag @<id> [+tag...] [-tag...]
+```
+
+Adds (`+tag`) and removes (`-tag`) tags on one item. Removals are applied
+before additions. Removing a tag the item does not have prints a warning and
+changes nothing; the command still succeeds.
+
+```bash
+tb --tag @3 +urgent +frontend
+tb --tag @3 -urgent
 ```
 
 ### Move to Board
@@ -203,7 +257,9 @@ tb --restore <id> [id...]
 tb -r <id> [id...]
 ```
 
-Restores archived items back to the active board.
+Restores archived items back to the active board. The IDs are **archive**
+IDs as shown by `tb --archive`, not the IDs the items had before deletion.
+Each restored item gets a new board ID (see [Item IDs](#item-ids)).
 
 ```bash
 tb --restore 4
@@ -218,6 +274,28 @@ tb --clear
 
 Permanently deletes all completed (checked) tasks from all boards.
 
+## Tags
+
+Tags are an addition in this Rust port; the original Node.js taskbook has
+none. An item can have any number of tags, shown after its description as
+`+tag`.
+
+- A tag is written as an argument starting with `+` and at least one more
+  character (`+urgent`). A lone `+` is ordinary text.
+- Tags are stored lowercase without the `+`, so `+Urgent` and `+urgent` are
+  the same tag. Duplicates are dropped.
+- Any characters are allowed after the `+` (`+a,b` is the single tag `a,b`).
+- Tags can be set on create (`--task`, `--note`), added by `--edit`, and added
+  or removed by `--tag`. They are kept when an item is deleted and restored.
+- Filtering: `--find +x` matches tags *containing* `x`; `--list +x` matches
+  the tag `x` exactly.
+
+In the TUI, the same `+tag` syntax works in `/task`, `/note` and `/edit`, and
+`/tag @<id> +add -remove` edits tags. Because the TUI splits on whitespace,
+every `+word` there becomes a tag. MCP clients pass tags as arrays
+(`create_task.tags`, `edit_item.tags` replaces the whole list, `list_items.tag`
+filters by one exact tag).
+
 ## Searching and Filtering
 
 ### Find Items
@@ -227,11 +305,15 @@ tb --find <search term>
 tb -f <search term>
 ```
 
-Searches for items containing the search term in their description.
+Searches for items whose description, note body, or tags contain the search
+term (case-insensitive substring). With several terms, an item matches if
+**any** term matches. A term starting with `+` searches tags only, still as a
+substring.
 
 ```bash
 tb --find documentation
 tb --find "pull request"
+tb --find +front        # matches tags "frontend", "front", ...
 ```
 
 ### List by Attributes
@@ -251,10 +333,15 @@ Filters items by one or more attributes:
 | `note` | All notes |
 | `starred` | Starred items |
 
+`+tag` filters by tag. Unlike `--find`, the tag must match exactly
+(case-insensitive), and with several `+tag` filters an item must have **all**
+of them.
+
 ```bash
 tb --list pending
 tb --list done starred
 tb --list task pending    # Pending tasks only
+tb --list +urgent +backend pending
 ```
 
 ## Clipboard
@@ -416,8 +503,8 @@ tb --timeline
 # Cleanup
 tb --delete 5 6 7
 tb --clear
-tb --archive                          # View deleted items
-tb --restore 5                        # Oops, restore one
+tb --archive                          # View deleted items and their archive IDs
+tb --restore 2                        # Oops, restore one (by archive ID)
 
 # Server sync
 tb --register

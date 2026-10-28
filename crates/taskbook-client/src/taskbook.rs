@@ -9,7 +9,7 @@ use crate::editor;
 use crate::error::{Result, TaskbookError};
 use crate::render::{Render, Stats};
 use crate::storage::{LocalStorage, RemoteStorage, StorageBackend};
-use taskbook_common::board::{self, DEFAULT_BOARD};
+use taskbook_common::board::{self, TagChanges, DEFAULT_BOARD};
 use taskbook_common::due;
 use taskbook_common::{Note, StorageItem, Task};
 
@@ -951,24 +951,27 @@ impl Taskbook {
         let validated_ids = self.validate_ids(&[id], &existing_ids)?;
         let id = validated_ids[0];
 
-        let new_desc: String = input
-            .iter()
-            .filter(|x| *x != target)
-            .cloned()
-            .collect::<Vec<_>>()
-            .join(" ");
+        // `+tag` arguments are added to the item's tags, as on create.
+        let (desc_words, add_tags) =
+            board::extract_tags(input.iter().filter(|x| *x != target).map(String::as_str));
+        let new_desc = desc_words.join(" ");
 
         if new_desc.is_empty() {
             self.render.missing_desc();
             return Err(TaskbookError::InvalidId(0));
         }
 
+        let mut added = Vec::new();
         if let Some(item) = data.get_mut(&id.to_string()) {
             item.set_description(new_desc);
+            let changes = board::apply_tag_changes(item.tags(), &add_tags, &[]);
+            item.set_tags(changes.tags);
+            added = changes.added;
         }
 
         self.save(&data)?;
         self.render.success_edit(id);
+        self.render.success_tag(id, &added, &[]);
         Ok(())
     }
 
@@ -1359,52 +1362,41 @@ impl Taskbook {
             return Err(TaskbookError::General("No tags provided".to_string()));
         }
 
-        if let Some(item) = data.get_mut(&id.to_string()) {
-            let mut current_tags: Vec<String> = item.tags().to_vec();
-
-            // Remove tags
-            current_tags.retain(|t| !remove_tags.iter().any(|r| t.eq_ignore_ascii_case(r)));
-
-            // Add tags (dedup)
-            for tag in &add_tags {
-                if !current_tags.iter().any(|t| t.eq_ignore_ascii_case(tag)) {
-                    current_tags.push(tag.clone());
-                }
-            }
-
-            item.set_tags(current_tags);
-        }
+        let Some(item) = data.get_mut(&id.to_string()) else {
+            return Err(TaskbookError::InvalidId(id));
+        };
+        let changes = board::apply_tag_changes(item.tags(), &add_tags, &remove_tags);
+        item.set_tags(changes.tags);
 
         self.save(&data)?;
-        self.render.success_tag(id, &add_tags, &remove_tags);
+        self.render
+            .success_tag(id, &changes.added, &changes.removed);
+        if !changes.not_found.is_empty() {
+            self.render.tags_not_found(id, &changes.not_found);
+        } else if changes.added.is_empty() && changes.removed.is_empty() {
+            self.render.tags_unchanged(id);
+        }
         Ok(())
     }
 
-    /// Update tags without CLI output (for TUI)
+    /// Update tags without CLI output (for TUI/MCP)
     pub fn update_tags_silent(
         &self,
         id: u64,
         add_tags: &[String],
         remove_tags: &[String],
-    ) -> Result<()> {
+    ) -> Result<TagChanges> {
         let mut data = self.get_data()?;
         let existing_ids = self.get_ids(&data);
         self.validate_ids_silent(&[id], &existing_ids)?;
 
-        if let Some(item) = data.get_mut(&id.to_string()) {
-            let mut current_tags: Vec<String> = item.tags().to_vec();
+        let Some(item) = data.get_mut(&id.to_string()) else {
+            return Err(TaskbookError::InvalidId(id));
+        };
+        let changes = board::apply_tag_changes(item.tags(), add_tags, remove_tags);
+        item.set_tags(changes.tags.clone());
 
-            current_tags.retain(|t| !remove_tags.iter().any(|r| t.eq_ignore_ascii_case(r)));
-
-            for tag in add_tags {
-                if !current_tags.iter().any(|t| t.eq_ignore_ascii_case(tag)) {
-                    current_tags.push(tag.clone());
-                }
-            }
-
-            item.set_tags(current_tags);
-        }
-
-        self.save(&data)
+        self.save(&data)?;
+        Ok(changes)
     }
 }

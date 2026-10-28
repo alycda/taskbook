@@ -591,6 +591,28 @@ impl Render {
         );
     }
 
+    pub fn tags_not_found(&self, id: u64, tags: &[String]) {
+        let tags_str = tags
+            .iter()
+            .map(|t| format!("+{}", t))
+            .collect::<Vec<_>>()
+            .join(", ");
+        eprintln!(
+            "\n {} Item {} does not have {}; nothing to remove",
+            self.warning("!"),
+            self.muted(&id.to_string()),
+            self.warning(&tags_str)
+        );
+    }
+
+    pub fn tags_unchanged(&self, id: u64) {
+        println!(
+            "\n {} Tags on item {} unchanged",
+            self.muted("○"),
+            self.muted(&id.to_string())
+        );
+    }
+
     pub fn success_tag(&self, id: u64, added: &[String], removed: &[String]) {
         if !added.is_empty() {
             let tags_str = added

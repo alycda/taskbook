@@ -130,6 +130,84 @@ pub fn display_tag(tag: &str) -> String {
     format!("+{}", tag)
 }
 
+/// Split words into description words and normalized `+tag` tags.
+///
+/// Uses the same rule as [`parse_cli_input`]: a word is a tag when it starts
+/// with `+` and is longer than 1 char. Tags are deduplicated case-insensitively.
+pub fn extract_tags<'a>(words: impl IntoIterator<Item = &'a str>) -> (Vec<&'a str>, Vec<String>) {
+    let mut desc = Vec::new();
+    let mut tags: Vec<String> = Vec::new();
+    for word in words {
+        if word.starts_with('+') && word.len() > 1 {
+            let tag = normalize_tag(word);
+            if !contains_tag(&tags, &tag) {
+                tags.push(tag);
+            }
+        } else {
+            desc.push(word);
+        }
+    }
+    (desc, tags)
+}
+
+/// Outcome of applying tag additions and removals to an item's tag list.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct TagChanges {
+    /// The item's tag list after the change.
+    pub tags: Vec<String>,
+    /// Tags that were not on the item before and are now.
+    pub added: Vec<String>,
+    /// Tags that were on the item before and are not now.
+    pub removed: Vec<String>,
+    /// Requested removals that were not on the item to begin with.
+    pub not_found: Vec<String>,
+}
+
+/// Apply `remove`, then `add`, to `current`, comparing tags case-insensitively.
+///
+/// `added` and `removed` are computed against `current`, so a tag that is
+/// both removed and re-added is reported as neither.
+pub fn apply_tag_changes(current: &[String], add: &[String], remove: &[String]) -> TagChanges {
+    let mut tags: Vec<String> = current
+        .iter()
+        .filter(|t| !contains_tag(remove, t))
+        .cloned()
+        .collect();
+    for tag in add {
+        if !contains_tag(&tags, tag) {
+            tags.push(tag.clone());
+        }
+    }
+
+    let added = tags
+        .iter()
+        .filter(|t| !contains_tag(current, t))
+        .cloned()
+        .collect();
+    let removed = current
+        .iter()
+        .filter(|t| !contains_tag(&tags, t))
+        .cloned()
+        .collect();
+    let mut not_found: Vec<String> = Vec::new();
+    for tag in remove {
+        if !contains_tag(current, tag) && !contains_tag(&not_found, tag) {
+            not_found.push(tag.clone());
+        }
+    }
+
+    TagChanges {
+        tags,
+        added,
+        removed,
+        not_found,
+    }
+}
+
+fn contains_tag(tags: &[String], tag: &str) -> bool {
+    tags.iter().any(|t| t.eq_ignore_ascii_case(tag))
+}
+
 fn is_priority_opt(s: &str) -> bool {
     matches!(s, "p:1" | "p:2" | "p:3")
 }
@@ -317,5 +395,54 @@ mod tests {
     #[test]
     fn test_display_tag() {
         assert_eq!(display_tag("urgent"), "+urgent");
+    }
+
+    #[test]
+    fn test_extract_tags() {
+        let (desc, tags) = extract_tags("fix the +Bug in C++ +bug + +ui".split_whitespace());
+        assert_eq!(desc, vec!["fix", "the", "in", "C++", "+"]);
+        assert_eq!(tags, vec!["bug", "ui"]);
+    }
+
+    fn strings(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn test_apply_tag_changes_add_and_remove() {
+        let changes = apply_tag_changes(
+            &strings(&["urgent", "frontend"]),
+            &strings(&["backend", "frontend"]),
+            &strings(&["urgent"]),
+        );
+        assert_eq!(changes.tags, strings(&["frontend", "backend"]));
+        assert_eq!(changes.added, strings(&["backend"]));
+        assert_eq!(changes.removed, strings(&["urgent"]));
+        assert!(changes.not_found.is_empty());
+    }
+
+    #[test]
+    fn test_apply_tag_changes_reports_missing_removals() {
+        let changes = apply_tag_changes(
+            &strings(&["urgent"]),
+            &[],
+            &strings(&["nope", "URGENT", "nope"]),
+        );
+        assert!(changes.tags.is_empty());
+        assert_eq!(changes.removed, strings(&["urgent"]));
+        assert_eq!(changes.not_found, strings(&["nope"]));
+    }
+
+    #[test]
+    fn test_apply_tag_changes_noop() {
+        let changes = apply_tag_changes(
+            &strings(&["urgent"]),
+            &strings(&["urgent"]),
+            &strings(&["urgent"]),
+        );
+        assert_eq!(changes.tags, strings(&["urgent"]));
+        assert!(changes.added.is_empty());
+        assert!(changes.removed.is_empty());
+        assert!(changes.not_found.is_empty());
     }
 }

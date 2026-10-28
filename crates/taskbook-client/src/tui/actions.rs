@@ -241,8 +241,12 @@ fn execute_command(app: &mut App, cmd: ParsedCommand) -> Result<()> {
                 }
             }
         }
-        ParsedCommand::Edit { id, description } => {
-            edit_description(app, id, &description)?;
+        ParsedCommand::Edit {
+            id,
+            description,
+            tags,
+        } => {
+            edit_description(app, id, &description, &tags)?;
         }
         ParsedCommand::Move { id, board } => {
             move_to_board(app, id, &board)?;
@@ -552,10 +556,20 @@ fn toggle_star(app: &mut App, id: u64) -> Result<()> {
     Ok(())
 }
 
-fn edit_description(app: &mut App, id: u64, new_desc: &str) -> Result<()> {
+fn edit_description(app: &mut App, id: u64, new_desc: &str, tags: &[String]) -> Result<()> {
     app.taskbook.edit_description_silent(id, new_desc)?;
+    let added = if tags.is_empty() {
+        Vec::new()
+    } else {
+        app.taskbook.update_tags_silent(id, tags, &[])?.added
+    };
     app.refresh_items()?;
-    app.set_status(format!("Updated item {}", id), StatusKind::Success);
+    let message = if added.is_empty() {
+        format!("Updated item {}", id)
+    } else {
+        format!("Updated item {}, added {}", id, format_tags(&added, '+'))
+    };
+    app.set_status(message, StatusKind::Success);
     Ok(())
 }
 
@@ -609,30 +623,42 @@ fn copy_to_clipboard(app: &mut App, id: u64) -> Result<()> {
 }
 
 fn update_tags(app: &mut App, id: u64, add: &[String], remove: &[String]) -> Result<()> {
-    app.taskbook.update_tags_silent(id, add, remove)?;
+    let changes = app.taskbook.update_tags_silent(id, add, remove)?;
     app.refresh_items()?;
     let mut parts = Vec::new();
-    if !add.is_empty() {
-        let tags_str = add
-            .iter()
-            .map(|t| format!("+{}", t))
-            .collect::<Vec<_>>()
-            .join(" ");
-        parts.push(format!("added {}", tags_str));
+    if !changes.added.is_empty() {
+        parts.push(format!("added {}", format_tags(&changes.added, '+')));
     }
-    if !remove.is_empty() {
-        let tags_str = remove
-            .iter()
-            .map(|t| format!("-{}", t))
-            .collect::<Vec<_>>()
-            .join(" ");
-        parts.push(format!("removed {}", tags_str));
+    if !changes.removed.is_empty() {
+        parts.push(format!("removed {}", format_tags(&changes.removed, '-')));
     }
-    app.set_status(
-        format!("Tags on item {}: {}", id, parts.join(", ")),
-        StatusKind::Success,
-    );
+    if parts.is_empty() {
+        parts.push("unchanged".to_string());
+    }
+    if changes.not_found.is_empty() {
+        app.set_status(
+            format!("Tags on item {}: {}", id, parts.join(", ")),
+            StatusKind::Success,
+        );
+    } else {
+        app.set_status(
+            format!(
+                "Tags on item {}: {}; not on item: {}",
+                id,
+                parts.join(", "),
+                format_tags(&changes.not_found, '+')
+            ),
+            StatusKind::Info,
+        );
+    }
     Ok(())
+}
+
+fn format_tags(tags: &[String], prefix: char) -> String {
+    tags.iter()
+        .map(|t| format!("{}{}", prefix, t))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn clear_completed(app: &mut App) -> Result<()> {

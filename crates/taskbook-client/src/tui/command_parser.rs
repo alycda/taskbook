@@ -1,4 +1,4 @@
-use taskbook_common::due;
+use taskbook_common::{board, due};
 
 /// Parsed command from the command line input
 #[derive(Debug, Clone)]
@@ -18,6 +18,7 @@ pub enum ParsedCommand {
     Edit {
         id: u64,
         description: String,
+        tags: Vec<String>,
     },
     Move {
         id: u64,
@@ -243,15 +244,17 @@ fn parse_edit(args: &str) -> Result<ParsedCommand, ParseError> {
     let desc = tokens.next().unwrap_or("").trim();
 
     let id = parse_at_id(id_token)?;
-    if desc.is_empty() {
+    let (desc_words, tags) = board::extract_tags(desc.split_whitespace());
+    if desc_words.is_empty() {
         return Err(ParseError {
-            message: "Usage: /edit @<id> <new description>".to_string(),
+            message: "Usage: /edit @<id> <new description> [+tag...]".to_string(),
         });
     }
 
     Ok(ParsedCommand::Edit {
         id,
-        description: desc.to_string(),
+        description: desc_words.join(" "),
+        tags,
     })
 }
 
@@ -652,5 +655,26 @@ mod tests {
             }
             _ => panic!("Expected Task"),
         }
+    }
+
+    #[test]
+    fn test_parse_edit_extracts_tags() {
+        match parse_command("/edit @3 new text +Urgent +ui").unwrap() {
+            ParsedCommand::Edit {
+                id,
+                description,
+                tags,
+            } => {
+                assert_eq!(id, 3);
+                assert_eq!(description, "new text");
+                assert_eq!(tags, vec!["urgent", "ui"]);
+            }
+            _ => panic!("Expected Edit"),
+        }
+    }
+
+    #[test]
+    fn test_parse_edit_tags_only_is_error() {
+        assert!(parse_command("/edit @3 +urgent").is_err());
     }
 }

@@ -146,6 +146,7 @@ tb --restore <id> [id...]   # Restore from archive
 tb --edit @<id> "New desc"  # Edit description
 tb --edit-note @<id>        # Edit note in external editor ($EDITOR)
 tb --move @<id> board       # Move to board
+tb --tag @<id> +a -b        # Add/remove tags (+tag also works on --task/--note/--edit)
 tb --priority @<id> <1-3>   # Set priority
 tb --due @<id> <date>       # Set due date (YYYY-MM-DD[ HH:MM], today, tomorrow, now, *+HHMM) or none to clear
 tb --find <term>            # Search items
