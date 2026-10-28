@@ -1408,3 +1408,58 @@ impl Taskbook {
         self.save(&data)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_taskbook() -> Taskbook {
+        let dir = std::env::temp_dir().join(format!("tb-taskbook-test-{}", uuid::Uuid::new_v4()));
+        let storage = LocalStorage::new(&dir).unwrap();
+        Taskbook::with_storage(Box::new(storage))
+    }
+
+    fn args(words: &[&str]) -> Vec<String> {
+        words.iter().map(|w| w.to_string()).collect()
+    }
+
+    // Regression coverage for the Node taskbook 0.3.0 bug where a quoted
+    // argument starting with `@` (`tb -t "@coding Fix the bug"`) was taken
+    // whole as a board name and stored a task with an empty description.
+
+    #[test]
+    fn quoted_board_only_task_is_rejected() {
+        let tb = test_taskbook();
+        assert!(tb.create_task(&args(&["@coding"])).is_err());
+        assert!(tb.get_all_items().unwrap().is_empty());
+    }
+
+    #[test]
+    fn quoted_board_only_note_is_rejected() {
+        let tb = test_taskbook();
+        assert!(tb.create_note(&args(&["@coding"])).is_err());
+        assert!(tb.get_all_items().unwrap().is_empty());
+    }
+
+    // Current behavior: the whole quoted argument is still parsed as a board,
+    // leaving no description, so the task is rejected instead of created.
+    #[test]
+    fn quoted_board_with_description_is_rejected() {
+        let tb = test_taskbook();
+        assert!(tb.create_task(&args(&["@coding Fix the bug"])).is_err());
+        assert!(tb.get_all_items().unwrap().is_empty());
+    }
+
+    // Current behavior: any extra argument gets past the empty-description
+    // guard, and the quoted argument is stored as a board name with spaces.
+    #[test]
+    fn quoted_board_followed_by_word_stores_misparsed_board() {
+        let tb = test_taskbook();
+        tb.create_task(&args(&["@coding Fix the bug", "now"]))
+            .unwrap();
+        let items = tb.get_all_items().unwrap();
+        let task = items.values().next().unwrap();
+        assert_eq!(task.description(), "now");
+        assert_eq!(task.boards(), ["coding Fix the bug"]);
+    }
+}
