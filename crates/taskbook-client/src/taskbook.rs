@@ -149,14 +149,6 @@ impl Taskbook {
     }
 
     fn get_options(&self, input: &[String]) -> Result<CreateOptions> {
-        if input.is_empty() {
-            self.render.missing_desc();
-            return Err(TaskbookError::InvalidId(0));
-        }
-
-        let data = self.get_data()?;
-        let id = self.generate_id(&data);
-
         let parsed = board::parse_cli_input(input).map_err(|e| match e {
             board::CliParseError::InvalidDueDate(raw) => {
                 self.render.invalid_due_date();
@@ -164,9 +156,18 @@ impl Taskbook {
             }
         })?;
 
+        let description = parsed.description.trim().to_string();
+        if description.is_empty() {
+            self.render.missing_desc();
+            return Err(TaskbookError::MissingDescription);
+        }
+
+        let data = self.get_data()?;
+        let id = self.generate_id(&data);
+
         Ok(CreateOptions {
             boards: parsed.boards,
-            description: parsed.description,
+            description,
             id,
             priority: parsed.priority,
             tags: parsed.tags,
@@ -685,11 +686,6 @@ impl Taskbook {
             ..
         } = self.get_options(desc)?;
 
-        if description.is_empty() {
-            self.render.missing_desc();
-            return Err(TaskbookError::InvalidId(0));
-        }
-
         let note = Note::new_with_tags(id, description, boards, tags);
         let mut data = self.get_data()?;
         data.insert(id.to_string(), StorageItem::Note(note));
@@ -787,11 +783,6 @@ impl Taskbook {
             tags,
             due_date,
         } = self.get_options(desc)?;
-
-        if description.is_empty() {
-            self.render.missing_desc();
-            return Err(TaskbookError::InvalidId(0));
-        }
 
         let task =
             Task::new_with_tags(id, description, boards, priority, tags).with_due_date(due_date);
@@ -956,11 +947,13 @@ impl Taskbook {
             .filter(|x| *x != target)
             .cloned()
             .collect::<Vec<_>>()
-            .join(" ");
+            .join(" ")
+            .trim()
+            .to_string();
 
         if new_desc.is_empty() {
             self.render.missing_desc();
-            return Err(TaskbookError::InvalidId(0));
+            return Err(TaskbookError::MissingDescription);
         }
 
         if let Some(item) = data.get_mut(&id.to_string()) {
@@ -1423,43 +1416,80 @@ mod tests {
         words.iter().map(|w| w.to_string()).collect()
     }
 
-    // Regression coverage for the Node taskbook 0.3.0 bug where a quoted
-    // argument starting with `@` (`tb -t "@coding Fix the bug"`) was taken
-    // whole as a board name and stored a task with an empty description.
+    fn only_item(tb: &Taskbook) -> StorageItem {
+        let items = tb.get_all_items().unwrap();
+        assert_eq!(items.len(), 1);
+        items.into_values().next().unwrap()
+    }
+
+    // Node taskbook 0.3.0 stores an empty description for
+    // `tb -t "@coding Fix the bug"`. A quoted `@` argument is one board name
+    // (the only CLI way to create a board containing spaces), so these inputs
+    // have no description and must be rejected rather than stored.
 
     #[test]
     fn quoted_board_only_task_is_rejected() {
         let tb = test_taskbook();
-        assert!(tb.create_task(&args(&["@coding"])).is_err());
+        let err = tb.create_task(&args(&["@coding"])).unwrap_err();
+        assert!(matches!(err, TaskbookError::MissingDescription));
         assert!(tb.get_all_items().unwrap().is_empty());
     }
 
     #[test]
     fn quoted_board_only_note_is_rejected() {
         let tb = test_taskbook();
-        assert!(tb.create_note(&args(&["@coding"])).is_err());
+        let err = tb.create_note(&args(&["@coding"])).unwrap_err();
+        assert!(matches!(err, TaskbookError::MissingDescription));
         assert!(tb.get_all_items().unwrap().is_empty());
     }
 
-    // Current behavior: the whole quoted argument is still parsed as a board,
-    // leaving no description, so the task is rejected instead of created.
     #[test]
     fn quoted_board_with_description_is_rejected() {
         let tb = test_taskbook();
-        assert!(tb.create_task(&args(&["@coding Fix the bug"])).is_err());
+        let err = tb.create_task(&args(&["@coding Fix the bug"])).unwrap_err();
+        assert!(matches!(err, TaskbookError::MissingDescription));
         assert!(tb.get_all_items().unwrap().is_empty());
     }
 
-    // Current behavior: any extra argument gets past the empty-description
-    // guard, and the quoted argument is stored as a board name with spaces.
     #[test]
-    fn quoted_board_followed_by_word_stores_misparsed_board() {
+    fn quoted_board_argument_is_one_board_name() {
         let tb = test_taskbook();
-        tb.create_task(&args(&["@coding Fix the bug", "now"]))
+        tb.create_task(&args(&["@Work Projects", "Write report"]))
             .unwrap();
-        let items = tb.get_all_items().unwrap();
-        let task = items.values().next().unwrap();
-        assert_eq!(task.description(), "now");
-        assert_eq!(task.boards(), ["coding Fix the bug"]);
+        let task = only_item(&tb);
+        assert_eq!(task.description(), "Write report");
+        assert_eq!(task.boards(), ["Work Projects"]);
+    }
+
+    #[test]
+    fn whitespace_only_task_is_rejected() {
+        let tb = test_taskbook();
+        let err = tb.create_task(&args(&["   "])).unwrap_err();
+        assert!(matches!(err, TaskbookError::MissingDescription));
+        assert!(tb.get_all_items().unwrap().is_empty());
+    }
+
+    #[test]
+    fn whitespace_only_note_is_rejected() {
+        let tb = test_taskbook();
+        let err = tb.create_note(&args(&["@coding", " "])).unwrap_err();
+        assert!(matches!(err, TaskbookError::MissingDescription));
+        assert!(tb.get_all_items().unwrap().is_empty());
+    }
+
+    #[test]
+    fn task_description_is_trimmed() {
+        let tb = test_taskbook();
+        tb.create_task(&args(&["  Fix the bug  "])).unwrap();
+        assert_eq!(only_item(&tb).description(), "Fix the bug");
+    }
+
+    #[test]
+    fn whitespace_only_edit_is_rejected() {
+        let tb = test_taskbook();
+        tb.create_task(&args(&["Fix the bug"])).unwrap();
+        let err = tb.edit_description(&args(&["@1", "   "])).unwrap_err();
+        assert!(matches!(err, TaskbookError::MissingDescription));
+        assert_eq!(only_item(&tb).description(), "Fix the bug");
     }
 }
